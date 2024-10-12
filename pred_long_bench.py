@@ -45,7 +45,7 @@ def post_process(response, model_name):
         response = response.split("<eoa>")[0]
     return response
 
-def get_pred(model, tokenizer, data, max_length, max_gen, prompt_format, dataset, device, model_name):
+def get_pred(model, tokenizer, data, max_length, max_gen, prompt_format, dataset, device, model_name, out_path):
     preds = []
     for json_obj in tqdm(data):
         prompt = prompt_format.format(**json_obj)
@@ -70,6 +70,17 @@ def get_pred(model, tokenizer, data, max_length, max_gen, prompt_format, dataset
                 min_length=context_length+1,
                 eos_token_id=[tokenizer.eos_token_id, tokenizer.encode("\n", add_special_tokens=False)[-1]],
             )[0]
+        elif 'mistral' in model_name.lower():
+            output = model.generate(
+                **input,
+                bos_token_id=1,
+                eos_token_id=2,
+                pad_token_id=2,
+                max_new_tokens=max_gen,
+                num_beams=1,
+                do_sample=False,
+                temperature=1.0,
+            )[0]
         else:
             output = model.generate(
                 **input,
@@ -80,7 +91,10 @@ def get_pred(model, tokenizer, data, max_length, max_gen, prompt_format, dataset
             )[0]
         pred = tokenizer.decode(output[context_length:], skip_special_tokens=True)
         pred = post_process(pred, model_name)
-        preds.append({"pred": pred, "answers": json_obj["answers"], "all_classes": json_obj["all_classes"], "length": json_obj["length"]})
+        # preds.append({"pred": pred, "answers": json_obj["answers"], "all_classes": json_obj["all_classes"], "length": json_obj["length"]})
+        with open(out_path, "a", encoding="utf-8") as f:
+            json.dump({"pred": pred, "answers": json_obj["answers"], "all_classes": json_obj["all_classes"], "length": json_obj["length"]}, f, ensure_ascii=False)
+            f.write('\n')
     return preds
 
 def seed_everything(seed):
@@ -104,6 +118,11 @@ if __name__ == '__main__':
     model_args, data_args, training_args = process_args()
     # print(model_args, data_args, training_args)
     model_name = model_args.model_name_or_path.split("/")[-1]
+    print(model_name)
+    print(model_args.model_name_or_path)
+    print('\n')
+    print(model_args)
+    print('\n')
     # dtype = torch.bfloat16 if training_args.bf16 else torch.float
     dtype = torch.float16
     
@@ -174,7 +193,8 @@ if __name__ == '__main__':
                 cache_dir=training_args.cache_dir,
                 torch_dtype=dtype,
                 low_cpu_mem_usage=True,
-                use_flash_attention_2=True,
+                # use_flash_attention_2=True,
+                attn_implementation="flash_attention_2",
                 device_map="auto",
             )
 
@@ -193,29 +213,33 @@ if __name__ == '__main__':
                     "trec", "triviaqa", "samsum", "passage_count", "passage_retrieval_en", "lcc", "repobench-p"]
     else:
         datasets = ["triviaqa", "qasper", "trec", "samsum", "lcc", "repobench-p", "qmsum", "multi_news"]
+        datasets = ["lcc", "repobench-p", "trec", "2wikimqa", "gov_report"]
+        datasets = ["lcc",]
+        datasets = ["repobench-p",]
+        datasets = ["multifieldqa_zh"]
     # we design specific prompt format and max generation length for each task, feel free to modify them to optimize model output
     dataset2prompt = json.load(open("config/dataset2prompt.json", "r"))
     dataset2maxlen = json.load(open("config/dataset2maxlen.json", "r"))
     # predict on each dataset
     if not os.path.exists("pred"):
         os.makedirs("pred")
-    if not os.path.exists("pred_e"):
-        os.makedirs("pred_e")
+    # if not os.path.exists("pred_e"):
+    #     os.makedirs("pred_e")
     for dataset in datasets:
         if data_args.e:
-            data = load_dataset('THUDM/LongBench', f"{dataset}_e", split='test')
+            data = load_dataset('../datasets/THUDM/LongBench', f"{dataset}_e", split='test')
             if not os.path.exists(f"pred_e/{model_name}_{max_length}_{model_args.k_bits}bits_group{model_args.group_size}_residual{model_args.residual_length}"):
                 os.makedirs(f"pred_e/{model_name}_{max_length}_{model_args.k_bits}bits_group{model_args.group_size}_residual{model_args.residual_length}")
             out_path = f"pred_e/{model_name}_{max_length}_{model_args.k_bits}bits_group{model_args.group_size}_residual{model_args.residual_length}/{dataset}.jsonl"
         else:
-            data = load_dataset('THUDM/LongBench', dataset, split='test')
+            data = load_dataset('../datasets/THUDM/LongBench', dataset, split='test')
             if not os.path.exists(f"pred/{model_name}_{max_length}_{model_args.k_bits}bits_group{model_args.group_size}_residual{model_args.residual_length}"):
                 os.makedirs(f"pred/{model_name}_{max_length}_{model_args.k_bits}bits_group{model_args.group_size}_residual{model_args.residual_length}")
             out_path = f"pred/{model_name}_{max_length}_{model_args.k_bits}bits_group{model_args.group_size}_residual{model_args.residual_length}/{dataset}.jsonl"
         prompt_format = dataset2prompt[dataset]
         max_gen = dataset2maxlen[dataset]
-        preds = get_pred(model, tokenizer, data, max_length, max_gen, prompt_format, dataset, device, model_name)
-        with open(out_path, "w", encoding="utf-8") as f:
-            for pred in preds:
-                json.dump(pred, f, ensure_ascii=False)
-                f.write('\n')
+        preds = get_pred(model, tokenizer, data, max_length, max_gen, prompt_format, dataset, device, model_name, out_path)
+        # with open(out_path, "w", encoding="utf-8") as f:
+        #     for pred in preds:
+        #         json.dump(pred, f, ensure_ascii=False)
+        #         f.write('\n')
