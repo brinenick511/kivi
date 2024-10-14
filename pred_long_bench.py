@@ -95,7 +95,8 @@ def get_pred(model, tokenizer, data, max_length, max_gen, prompt_format, dataset
         with open(out_path, "a", encoding="utf-8") as f:
             json.dump({"pred": pred, "answers": json_obj["answers"], "all_classes": json_obj["all_classes"], "length": json_obj["length"]}, f, ensure_ascii=False)
             f.write('\n')
-    return preds
+        torch.cuda.empty_cache()
+    # return preds
 
 def seed_everything(seed):
     torch.manual_seed(seed)
@@ -224,9 +225,8 @@ if __name__ == '__main__':
         datasets = ["lcc", "repobench-p", "trec", "2wikimqa", "gov_report"]
         # datasets = ["lcc",]
         # datasets = ["repobench-p",]
-        # datasets = ["multifieldqa_zh"]
         datasets = ["lcc", "repobench-p", "trec", "2wikimqa", "gov_report", "multifieldqa_zh"]
-        datasets = ["narrativeqa"]
+        # datasets = ["multifieldqa_zh"]
     # we design specific prompt format and max generation length for each task, feel free to modify them to optimize model output
     dataset2prompt = json.load(open("config/dataset2prompt.json", "r"))
     dataset2maxlen = json.load(open("config/dataset2maxlen.json", "r"))
@@ -238,7 +238,7 @@ if __name__ == '__main__':
     for dataset in datasets:
         output_path = define_path(
             model_name,None,model_args.k_bits,model_args.v_bits,
-            model_args.group_size,model_args.residual_length,None)
+            model_args.group_size,model_args.residual_length,model_args.annotation)
         if data_args.e:
             output_path = f'pred_e/{output_path}'
             data = load_dataset('../datasets/THUDM/LongBench', f"{dataset}_e", split='test')
@@ -253,7 +253,8 @@ if __name__ == '__main__':
             out_path = f"{output_path}/{dataset}.jsonl"
         prompt_format = dataset2prompt[dataset]
         max_gen = dataset2maxlen[dataset]
-        preds = get_pred(model, tokenizer, data, max_length, max_gen, prompt_format, dataset, device, model_name, out_path)
+        # preds = get_pred(model, tokenizer, data, max_length, max_gen, prompt_format, dataset, device, model_name, out_path)
+        get_pred(model, tokenizer, data, max_length, max_gen, prompt_format, dataset, device, model_name, out_path)
         # with open(out_path, "w", encoding="utf-8") as f:
         #     for pred in preds:
         #         json.dump(pred, f, ensure_ascii=False)

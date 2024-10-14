@@ -3,7 +3,7 @@ import json
 import argparse
 import numpy as np
 
-from utils.process_args import process_args, define_name
+from utils.process_args import process_args, define_path
 # from utils.name import work
 
 from metrics import (
@@ -82,9 +82,9 @@ if __name__ == '__main__':
     # args = parse_args()
     model_args, data_args, training_args = process_args()
     model_name = model_args.model_name_or_path.split("/")[-1]
-    output_path = define_name(
+    output_path = define_path(
         model_name,None,model_args.k_bits,model_args.v_bits,
-        model_args.group_size,model_args.residual_length,None)
+        model_args.group_size,model_args.residual_length,model_args.annotation)
     scores = dict()
     # if data_args.e:
     #     path = f"pred_e/{args.model}/"

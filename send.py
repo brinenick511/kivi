@@ -8,7 +8,7 @@ import argparse
 from tqdm import tqdm
 import os
 
-from utils.process_args import process_args, define_name
+from utils.process_args import process_args, define_path
 
 def parse_args(args=None):
     parser = argparse.ArgumentParser()
@@ -46,9 +46,9 @@ if __name__ == "__main__":
     # path = f'/new_data/yanghq/LongBench/pred/{model_name}/result.json'
     model_args, data_args, training_args = process_args()
     model_name = model_args.model_name_or_path.split("/")[-1]
-    output_path = define_name(
+    output_path = define_path(
         model_name,None,model_args.k_bits,model_args.v_bits,
-        model_args.group_size,model_args.residual_length,None)
+        model_args.group_size,model_args.residual_length,model_args.annotation)
     path = f'pred/{output_path}/result.json'
     if os.path.exists(path):
         with open(path, 'r', encoding='utf-8') as file:
