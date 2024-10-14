@@ -85,6 +85,8 @@ if __name__ == '__main__':
     output_path = define_name(
         model_name,None,model_args.k_bits,model_args.v_bits,
         model_args.group_size,model_args.residual_length,None)
+    print(output_path)
+    exit(0)
     scores = dict()
     # if data_args.e:
     #     path = f"pred_e/{args.model}/"
