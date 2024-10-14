@@ -3,6 +3,9 @@ import json
 import argparse
 import numpy as np
 
+from process_args import process_args
+from name import work
+
 from metrics import (
     qa_f1_score,
     rouge_zh_score,
@@ -76,12 +79,18 @@ def scorer(dataset, predictions, answers, all_classes):
     return round(100 * total_score / len(predictions), 2)
 
 if __name__ == '__main__':
-    args = parse_args()
+    # args = parse_args()
+    model_args, data_args, training_args = process_args()
+    model_name = model_args.model_name_or_path.split("/")[-1]
+    output_path = work(
+        model_name,None,model_args.k_bits,model_args.v_bits,
+        model_args.group_size,model_args.residual_length,None)
     scores = dict()
-    if args.e:
-        path = f"pred_e/{args.model}/"
-    else:
-        path = f"pred/{args.model}/"
+    # if data_args.e:
+    #     path = f"pred_e/{args.model}/"
+    # else:
+    #     path = f"pred/{args.model}/"
+    path = f'pred/{output_path}/'
     all_files = os.listdir(path)
     print("Evaluating on:", all_files)
     for filename in all_files:
@@ -97,14 +106,16 @@ if __name__ == '__main__':
                 all_classes = data["all_classes"]
                 if "length" in data:
                     lengths.append(data["length"])
-        if args.e:
+        if data_args.e:
             score = scorer_e(dataset, predictions, answers, lengths, all_classes)
         else:
             score = scorer(dataset, predictions, answers, all_classes)
         scores[dataset] = score
-    if args.e:
-        out_path = f"pred_e/{args.model}/result.json"
+    if data_args.e:
+        # out_path = f"pred_e/{args.model}/result.json"
+        out_path = f'pred_e/{output_path}/result.json'
     else:
-        out_path = f"pred/{args.model}/result.json"
+        # out_path = f"pred/{args.model}/result.json"
+        out_path = f'pred/{output_path}/result.json'
     with open(out_path, "w") as f:
         json.dump(scores, f, ensure_ascii=False, indent=4)

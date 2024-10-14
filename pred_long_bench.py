@@ -9,6 +9,7 @@ import argparse
 os.environ["WANDB_DISABLED"] = "true"
 
 from utils.process_args import process_args
+from utils.name import work
 from transformers import LlamaConfig, MistralConfig, AutoTokenizer
 
 
@@ -227,16 +228,21 @@ if __name__ == '__main__':
     # if not os.path.exists("pred_e"):
     #     os.makedirs("pred_e")
     for dataset in datasets:
+        output_path = work(
+            model_name,None,model_args.k_bits,model_args.v_bits,
+            model_args.group_size,model_args.residual_length,None)
         if data_args.e:
+            output_path = f'pred_e/{output_path}'
             data = load_dataset('../datasets/THUDM/LongBench', f"{dataset}_e", split='test')
-            if not os.path.exists(f"pred_e/{model_name}_{max_length}_{model_args.k_bits}bits_group{model_args.group_size}_residual{model_args.residual_length}"):
-                os.makedirs(f"pred_e/{model_name}_{max_length}_{model_args.k_bits}bits_group{model_args.group_size}_residual{model_args.residual_length}")
-            out_path = f"pred_e/{model_name}_{max_length}_{model_args.k_bits}bits_group{model_args.group_size}_residual{model_args.residual_length}/{dataset}.jsonl"
+            if not os.path.exists(output_path):
+                os.makedirs(output_path)
+            out_path = f"{output_path}/{dataset}.jsonl"
         else:
+            output_path = f'pred/{output_path}'
             data = load_dataset('../datasets/THUDM/LongBench', dataset, split='test')
-            if not os.path.exists(f"pred/{model_name}_{max_length}_{model_args.k_bits}bits_group{model_args.group_size}_residual{model_args.residual_length}"):
-                os.makedirs(f"pred/{model_name}_{max_length}_{model_args.k_bits}bits_group{model_args.group_size}_residual{model_args.residual_length}")
-            out_path = f"pred/{model_name}_{max_length}_{model_args.k_bits}bits_group{model_args.group_size}_residual{model_args.residual_length}/{dataset}.jsonl"
+            if not os.path.exists(output_path):
+                os.makedirs(output_path)
+            out_path = f"{output_path}/{dataset}.jsonl"
         prompt_format = dataset2prompt[dataset]
         max_gen = dataset2maxlen[dataset]
         preds = get_pred(model, tokenizer, data, max_length, max_gen, prompt_format, dataset, device, model_name, out_path)

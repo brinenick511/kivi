@@ -72,7 +72,10 @@ class ModelArguments:
         default=0.,
         metadata={"help": "LoRA dropout"},
     )
-    
+    annotation: Optional[str] = field(
+        default=None,
+        metadata={"help": "The annotation of this exp"},
+    )
 
 
 @dataclass
@@ -142,3 +145,13 @@ def process_args():
     )
 
     return model_args, data_args, training_args
+
+def define_name(model_name, model_path, k_bits, v_bits, group_size, residual_length, annotation):
+    if model_name is None:
+        if model_path is None:
+            return 'ERROR'
+        model_name = model_path.split("/")[-1]
+    s = f'{model_name}_{k_bits}bits'
+    # s += f'_g{group_size}_r{residual_length}'
+    # s += f'_{annotation}'
+    return s
