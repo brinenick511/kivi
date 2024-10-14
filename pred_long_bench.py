@@ -119,7 +119,7 @@ if __name__ == '__main__':
     # print(model_args, data_args, training_args)
     model_name = model_args.model_name_or_path.split("/")[-1]
     print(model_name)
-    print(model_args.model_name_or_path)
+    # print(model_args.model_name_or_path)
     print('\n')
     print(model_args)
     print('\n')
@@ -171,6 +171,13 @@ if __name__ == '__main__':
 
     elif 'mistral' in model_args.model_name_or_path.lower():
         if model_args.k_bits < 16 and model_args.v_bits < 16:
+            # d_map = {
+            #     'model.embed_tokens': 0, 'model.layers.0': 0, 'model.layers.1': 0, 'model.layers.2': 0, 'model.layers.3': 0, 'model.layers.4': 0, 'model.layers.5': 0, 'model.layers.6': 0, 'model.layers.7': 0, 'model.layers.8': 0, 'model.layers.9': 0, 'model.layers.10': 0, 'model.layers.11': 0, 'model.layers.12': 0, 'model.layers.13': 0, 'model.layers.14': 0, 
+            #     'model.layers.15.self_attn': 0, 'model.layers.15.mlp.gate_proj': 0, 'model.layers.15.mlp.up_proj': 0, 'model.layers.15.mlp.down_proj': 0, 'model.layers.15.mlp.act_fn': 0, 'model.layers.15.input_layernorm': 0, 'model.layers.15.post_attention_layernorm': 0, 
+            #     'model.layers.16': 0, 'model.layers.17': 1, 'model.layers.18': 1, 'model.layers.19': 1, 'model.layers.20': 1, 'model.layers.21': 1, 'model.layers.22': 1, 'model.layers.23': 1, 'model.layers.24': 1, 'model.layers.25': 1, 'model.layers.26': 1, 'model.layers.27': 1, 'model.layers.28': 1, 'model.layers.29': 1, 'model.layers.30': 1, 'model.layers.31': 1, 'model.norm': 1, 'lm_head': 1}
+            # for key in d_map.keys():
+            #     if '16' in key or '15' in key or '14' in key:
+            #         d_map[key] = 1
             from models.mistral_kivi import MistralForCausalLM_KIVI
             config.k_bits = model_args.k_bits
             config.v_bits = model_args.v_bits
@@ -184,7 +191,9 @@ if __name__ == '__main__':
                 torch_dtype=dtype,
                 low_cpu_mem_usage=True,
                 device_map="auto",
+                # device_map=d_map,
             )
+            # print(model.hf_device_map)
         else:
             from transformers import MistralForCausalLM
             model = MistralForCausalLM.from_pretrained(
@@ -217,6 +226,7 @@ if __name__ == '__main__':
         # datasets = ["repobench-p",]
         # datasets = ["multifieldqa_zh"]
         datasets = ["lcc", "repobench-p", "trec", "2wikimqa", "gov_report", "multifieldqa_zh"]
+        datasets = ["narrativeqa"]
     # we design specific prompt format and max generation length for each task, feel free to modify them to optimize model output
     dataset2prompt = json.load(open("config/dataset2prompt.json", "r"))
     dataset2maxlen = json.load(open("config/dataset2maxlen.json", "r"))
