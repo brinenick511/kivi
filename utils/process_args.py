@@ -155,3 +155,21 @@ def define_name(model_name, model_path, k_bits, v_bits, group_size, residual_len
     # s += f'_g{group_size}_r{residual_length}'
     # s += f'_{annotation}'
     return s
+
+def define_path(model_name, model_path, k_bits, v_bits, group_size, residual_length, annotation):
+    if model_name is None:
+        if model_path is None:
+            return 'ERROR'
+        model_name = model_path.split("/")[-1]
+    s = f'{model_name}_{k_bits}bits'
+    # s += f'_g{group_size}_r{residual_length}'
+    # s += f'_{annotation}'
+    return s
+
+def work():
+    model_args, data_args, training_args = process_args()
+    model_name = model_args.model_name_or_path.split("/")[-1]
+    output_path = define_path(
+        model_name,None,model_args.k_bits,model_args.v_bits,
+        model_args.group_size,model_args.residual_length,None)
+    return output_path

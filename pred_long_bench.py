@@ -8,8 +8,7 @@ import random
 import argparse
 os.environ["WANDB_DISABLED"] = "true"
 
-from utils.process_args import process_args
-from utils.name import work
+from utils.process_args import process_args, define_path
 from transformers import LlamaConfig, MistralConfig, AutoTokenizer
 
 
@@ -202,7 +201,6 @@ if __name__ == '__main__':
     else:
         raise NotImplementedError
 
-    #
     # Load model directly
     # tokenizer = AutoTokenizer.from_pretrained("togethercomputer/LLaMA-2-7B-32K")
     # model = AutoModelForCausalLM.from_pretrained("togethercomputer/LLaMA-2-7B-32K")
@@ -228,7 +226,7 @@ if __name__ == '__main__':
     # if not os.path.exists("pred_e"):
     #     os.makedirs("pred_e")
     for dataset in datasets:
-        output_path = work(
+        output_path = define_path(
             model_name,None,model_args.k_bits,model_args.v_bits,
             model_args.group_size,model_args.residual_length,None)
         if data_args.e:

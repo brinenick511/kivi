@@ -19,7 +19,15 @@ CUDA_VISIBLE_DEVICES=$gpuid python pred_long_bench.py --model_name_or_path $mode
     --residual_length $residual_length \
     --e ${e}
 
-CUDA_VISIBLE_DEVICES=$gpuid python3 eval.py --model_name_or_path $model \
+python3 eval.py --model_name_or_path $model \
+    --cache_dir ./cached_models \
+    --k_bits $k_bits \
+    --v_bits $v_bits \
+    --group_size $group_size \
+    --residual_length $residual_length \
+    --e ${e}
+
+python3 send.py --model_name_or_path $model \
     --cache_dir ./cached_models \
     --k_bits $k_bits \
     --v_bits $v_bits \

@@ -3,8 +3,8 @@ import json
 import argparse
 import numpy as np
 
-from process_args import process_args
-from name import work
+from utils.process_args import process_args, define_name
+# from utils.name import work
 
 from metrics import (
     qa_f1_score,
@@ -82,7 +82,7 @@ if __name__ == '__main__':
     # args = parse_args()
     model_args, data_args, training_args = process_args()
     model_name = model_args.model_name_or_path.split("/")[-1]
-    output_path = work(
+    output_path = define_name(
         model_name,None,model_args.k_bits,model_args.v_bits,
         model_args.group_size,model_args.residual_length,None)
     scores = dict()

@@ -8,6 +8,8 @@ import argparse
 from tqdm import tqdm
 import os
 
+from utils.process_args import process_args, define_name
+
 def parse_args(args=None):
     parser = argparse.ArgumentParser()
     parser.add_argument('--model', type=str, default=None)
@@ -39,18 +41,21 @@ def send_qq_email(subject='### GPU提醒 ###', body='<=GPU提醒=>'):
         print('邮件发送失败:', str(e))
         
 if __name__ == "__main__":
-    args = parse_args()
-    model_name = args.model
-    path = f'/new_data/yanghq/LongBench/pred/{model_name}/result.json'
-        # 检查文件是否存在
+    # args = parse_args()
+    # model_name = args.model
+    # path = f'/new_data/yanghq/LongBench/pred/{model_name}/result.json'
+    model_args, data_args, training_args = process_args()
+    model_name = model_args.model_name_or_path.split("/")[-1]
+    output_path = define_name(
+        model_name,None,model_args.k_bits,model_args.v_bits,
+        model_args.group_size,model_args.residual_length,None)
+    path = f'pred/{output_path}/result.json'
     if os.path.exists(path):
-        # 如果文件存在，读取内容
         with open(path, 'r', encoding='utf-8') as file:
             file_content = file.read()
-        # print("文件存在，内容已读取为字符串。")
-        send_qq_email(f'{model_name}: Success',f'{model_name}\n'+file_content)
-        print(f'{model_name}: Success')
+        send_qq_email(f'{output_path}: Success',f'{output_path}\n'+file_content)
+        print(f'{output_path}: Success')
     else:
-        send_qq_email(f'{model_name}: Fail',f'{model_name}: Fail')
-        print(f'{model_name}: Fail')
+        send_qq_email(f'{output_path}: Fail',f'{output_path}: Fail')
+        print(f'{output_path}: Fail')
     
