@@ -214,9 +214,10 @@ if __name__ == '__main__':
     else:
         datasets = ["triviaqa", "qasper", "trec", "samsum", "lcc", "repobench-p", "qmsum", "multi_news"]
         datasets = ["lcc", "repobench-p", "trec", "2wikimqa", "gov_report"]
-        datasets = ["lcc",]
-        datasets = ["repobench-p",]
-        datasets = ["multifieldqa_zh"]
+        # datasets = ["lcc",]
+        # datasets = ["repobench-p",]
+        # datasets = ["multifieldqa_zh"]
+        datasets = ["lcc", "repobench-p", "trec", "2wikimqa", "gov_report", "multifieldqa_zh"]
     # we design specific prompt format and max generation length for each task, feel free to modify them to optimize model output
     dataset2prompt = json.load(open("config/dataset2prompt.json", "r"))
     dataset2maxlen = json.load(open("config/dataset2maxlen.json", "r"))
