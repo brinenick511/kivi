@@ -1,3 +1,4 @@
+# conda install cuda-nvcc=12.1.105 -c nvidia
 torch==2.1.2
 packaging==24.0
 absl-py==2.0.0
