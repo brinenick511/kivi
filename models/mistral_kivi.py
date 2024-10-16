@@ -38,6 +38,29 @@ from transformers.modeling_attn_mask_utils import _prepare_4d_causal_attention_m
 
 _CONFIG_FOR_DOC = "MistralConfig"
 
+import pickle
+def cl(b):
+    if b is None:
+        return 'NO|NE'
+    b=str(type(b))
+    if isinstance(b,str) == False:
+        b = str(b)
+    if 'tensor' in b.lower():
+        return 'tensor'
+    return b[:-2][8:]
+def _p(a, s=''):
+    s += f'{cl(a)}'
+    if isinstance(a, list) or isinstance(a, tuple):
+        s+=f'[{len(a)}]: {_p(a[0])}'
+    if isinstance(a, torch.Tensor):
+        s+=f'{(str(a.shape))[11:][:-1]}'
+    return s
+def p(a,annotation=None):
+    s=_p(a,'')
+    if annotation is not None:
+        s=f'|{annotation}|{s}'
+    print(s) 
+
 if is_flash_attn_2_available():
     from flash_attn import flash_attn_func, flash_attn_varlen_func
     from flash_attn.bert_padding import index_first_axis, pad_input, unpad_input  # noqa
@@ -994,7 +1017,14 @@ class MistralForCausalLM_KIVI(MistralPreTrainedModel):
             output_hidden_states if output_hidden_states is not None else self.config.output_hidden_states
         )
         return_dict = return_dict if return_dict is not None else self.config.use_return_dict
-
+        # print('CLM 997')
+        p(input_ids)
+        # p(past_key_values)
+        # path='/new_data/yanghq/test.pkl'
+        # if past_key_values is not None:
+        #     with open(path, 'wb') as file:
+        #         pickle.dump(past_key_values, file)
+        #     exit(0)
         # decoder outputs consists of (dec_features, layer_state, dec_hidden, dec_attn)
         outputs = self.model(
             input_ids=input_ids,
@@ -1007,7 +1037,8 @@ class MistralForCausalLM_KIVI(MistralPreTrainedModel):
             output_hidden_states=output_hidden_states,
             return_dict=return_dict,
         )
-
+        # print('CLM 1015')
+        # p(past_key_values)
         hidden_states = outputs[0]
         logits = self.lm_head(hidden_states)
         logits = logits.float()
