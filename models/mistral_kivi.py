@@ -269,7 +269,8 @@ class MistralAttention_KIVI(nn.Module):
                 key_states_quant = key_states
                 key_states_full = None
             if key_states_quant is not None:
-                key_states_quant_trans, key_scale_trans, key_mn_trans = triton_quantize_and_pack_along_last_dim(key_states_quant.transpose(2, 3).contiguous(), self.group_size, self.k_bits)
+                key_states_quant_trans, key_scale_trans, key_mn_trans = triton_quantize_and_pack_along_last_dim(
+                    key_states_quant.transpose(2, 3).contiguous(), self.group_size, self.k_bits)
             else:
                 key_states_quant_trans = None
                 key_scale_trans = None
@@ -283,9 +284,8 @@ class MistralAttention_KIVI(nn.Module):
             else:
                 value_states_quant = value_states[:, :, :-self.residual_length, :].contiguous()
                 value_states_full = value_states[:, :, -self.residual_length:, :].contiguous()
-                value_states_quant, value_scale, value_mn = triton_quantize_and_pack_along_last_dim(value_states_quant, 
-                                                                                                self.group_size, 
-                                                                                                self.v_bits)
+                value_states_quant, value_scale, value_mn = triton_quantize_and_pack_along_last_dim(
+                    value_states_quant, self.group_size, self.v_bits)
         
             key_states = repeat_kv(key_states, self.num_key_value_groups)
             value_states = repeat_kv(value_states, self.num_key_value_groups)
@@ -389,6 +389,7 @@ class MistralFlashAttention_KIVI(MistralAttention_KIVI):
         #     )
 
         if past_key_value is not None:
+            # INFO: decoding
             key_states_quant_trans = past_key_value[0]
             key_states_full = past_key_value[1]
             key_scale_trans = past_key_value[2]
@@ -489,6 +490,7 @@ class MistralFlashAttention_KIVI(MistralAttention_KIVI):
 
 
         else:
+            # INFO: prefill
             # print(f"kivi with flash! {self.k_bits}")
 
             key_states_repeat = repeat_kv(key_states, self.num_key_value_groups)
@@ -527,7 +529,8 @@ class MistralFlashAttention_KIVI(MistralAttention_KIVI):
                 key_states_quant = key_states
                 key_states_full = None
             if key_states_quant is not None:
-                key_states_quant_trans, key_scale_trans, key_mn_trans = triton_quantize_and_pack_along_last_dim(key_states_quant.transpose(2, 3).contiguous(), self.group_size, self.k_bits)
+                key_states_quant_trans, key_scale_trans, key_mn_trans = triton_quantize_and_pack_along_last_dim(
+                    key_states_quant.transpose(2, 3).contiguous(), self.group_size, self.k_bits)
             else:
                 key_states_quant_trans = None
                 key_scale_trans = None
@@ -541,13 +544,12 @@ class MistralFlashAttention_KIVI(MistralAttention_KIVI):
             else:
                 value_states_quant = value_states[:, :, :-self.residual_length, :].contiguous()
                 value_states_full = value_states[:, :, -self.residual_length:, :].contiguous()
-                value_states_quant, value_scale, value_mn = triton_quantize_and_pack_along_last_dim(value_states_quant, 
-                                                                                                self.group_size, 
-                                                                                                self.v_bits)
-            
-        past_key_value = (key_states_quant_trans, key_states_full, key_scale_trans, key_mn_trans, 
-                          value_states_quant, value_states_full, value_scale, value_mn, kv_seq_len) if use_cache else None
-
+                value_states_quant, value_scale, value_mn = triton_quantize_and_pack_along_last_dim(
+                    value_states_quant, self.group_size, self.v_bits)
+        past_key_value = (
+            key_states_quant_trans, key_states_full, key_scale_trans, key_mn_trans,
+            value_states_quant, value_states_full, value_scale, value_mn, kv_seq_len
+            ) if use_cache else None
         attn_output = attn_output.reshape(bsz, q_len, self.hidden_size).contiguous()
         attn_output = self.o_proj(attn_output)
 
@@ -1017,14 +1019,6 @@ class MistralForCausalLM_KIVI(MistralPreTrainedModel):
             output_hidden_states if output_hidden_states is not None else self.config.output_hidden_states
         )
         return_dict = return_dict if return_dict is not None else self.config.use_return_dict
-        # print('CLM 997')
-        p(input_ids)
-        # p(past_key_values)
-        # path='/new_data/yanghq/test.pkl'
-        # if past_key_values is not None:
-        #     with open(path, 'wb') as file:
-        #         pickle.dump(past_key_values, file)
-        #     exit(0)
         # decoder outputs consists of (dec_features, layer_state, dec_hidden, dec_attn)
         outputs = self.model(
             input_ids=input_ids,
@@ -1037,8 +1031,6 @@ class MistralForCausalLM_KIVI(MistralPreTrainedModel):
             output_hidden_states=output_hidden_states,
             return_dict=return_dict,
         )
-        # print('CLM 1015')
-        # p(past_key_values)
         hidden_states = outputs[0]
         logits = self.lm_head(hidden_states)
         logits = logits.float()
