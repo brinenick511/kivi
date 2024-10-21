@@ -866,11 +866,13 @@ class MistralModel_KIVI(MistralPreTrainedModel):
         
         # print(self.idx, self.cnt)
         if past_key_values is not None and self.cnt==1:
-            tl = past_key_values[:16]
+            num_layer = 16
+            num_layer = 2
+            tl = past_key_values[:num_layer]
             tr = ()
-            for i in range(8):
-                id_l = 16+2*i
-                id_u = 16+2*i+1
+            for i in range((32-num_layer)//2):
+                id_l = num_layer+2*i
+                id_u = num_layer+2*i+1
                 k_l = unpack_tensor(past_key_values[id_l][4],self.v_bits,3)
                 k_u = unpack_tensor(past_key_values[id_u][4],self.v_bits,3)
                 k_l = (k_l+k_u)//2
