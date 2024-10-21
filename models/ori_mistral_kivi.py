@@ -29,7 +29,7 @@ import torch.utils.checkpoint
 from torch import nn
 from torch.nn import BCEWithLogitsLoss, CrossEntropyLoss, MSELoss
 
-from quant.new_pack import triton_quantize_and_pack_along_last_dim, debugging, unpack_tensor,pack_tensor
+from quant.new_pack import triton_quantize_and_pack_along_last_dim
 from quant.matmul import cuda_bmm_fA_qB_outer
 
 from transformers.models.mistral.configuration_mistral import *
@@ -59,22 +59,7 @@ def p(a,annotation=None):
     s=_p(a,'')
     if annotation is not None:
         s=f'|{annotation}|{s}'
-    print(s)
-def debug_print(a):
-    def _test(b,n,s,anno):
-        s+=('\n'+n*'\t'+anno+': '+str(type(b))[8:][:-2])
-        if isinstance(b,torch.Tensor):
-            s+=str(b.shape)[11:][:-1]
-        if isinstance(b,list) or isinstance(b,tuple):
-            s+=f'[{len(b)}]'
-            k = len(b)
-            if k >10:
-                k=2
-            for i in range(k):
-                s = _test(b[i],n+1,s,str(i))
-        return s
-    print(_test(a,0,'',''))
-# DEBUG: START HERE
+    print(s) 
 
 if is_flash_attn_2_available():
     from flash_attn import flash_attn_func, flash_attn_varlen_func
@@ -711,7 +696,7 @@ class MistralFlashAttention_KIVI(MistralAttention_KIVI):
 
 
 class MistralDecoderLayer_KIVI(nn.Module):
-    def __init__(self, config: MistralConfig, layer_idx: int):
+    def __init__(self, config: MistralConfig):
         super().__init__()
         self.hidden_size = config.hidden_size
         self.self_attn = (
@@ -722,8 +707,7 @@ class MistralDecoderLayer_KIVI(nn.Module):
         self.mlp = MistralMLP(config)
         self.input_layernorm = MistralRMSNorm(config.hidden_size, eps=config.rms_norm_eps)
         self.post_attention_layernorm = MistralRMSNorm(config.hidden_size, eps=config.rms_norm_eps)
-        self.layer_idx = layer_idx
-        
+
     def forward(
         self,
         hidden_states: torch.Tensor,
@@ -802,20 +786,12 @@ class MistralModel_KIVI(MistralPreTrainedModel):
         self.vocab_size = config.vocab_size
 
         self.embed_tokens = nn.Embedding(config.vocab_size, config.hidden_size, self.padding_idx)
-        self.layers = nn.ModuleList([MistralDecoderLayer_KIVI(config,idx) for idx in range(config.num_hidden_layers)])
+        self.layers = nn.ModuleList([MistralDecoderLayer_KIVI(config) for _ in range(config.num_hidden_layers)])
         self.norm = MistralRMSNorm(config.hidden_size, eps=config.rms_norm_eps)
 
         self.gradient_checkpointing = False
         # Initialize weights and apply final processing
         self.post_init()
-        self.k_bits = config.k_bits
-        self.v_bits = config.v_bits
-        
-        # INFO: count
-        self.cnt=-1
-        self.idx=-1
-        # self.test=[]
-        self.test=[18, 6, 8, 10, 14, 10, 5, 14, 14, 4, 31, 31, 31, 17, 2, 31, 31, 31, 31, 3, 8]
 
     def get_input_embeddings(self):
         return self.embed_tokens
@@ -854,41 +830,6 @@ class MistralModel_KIVI(MistralPreTrainedModel):
         else:
             raise ValueError("You have to specify either decoder_input_ids or decoder_inputs_embeds")
 
-        # INFO: count
-        if seq_length !=1: # prefill
-            self.cnt=0
-            self.idx+=1
-            # ADDED: prefill merge int32
-            # for i in range(16):
-                
-        else: # decode
-            self.cnt+=1
-        
-        # print(self.idx, self.cnt)
-        if past_key_values is not None and self.cnt==1:
-            tl = past_key_values[:16]
-            tr = ()
-            for i in range(8):
-                id_l = 16+2*i
-                id_u = 16+2*i+1
-                k_l = unpack_tensor(past_key_values[id_l][0],self.k_bits,3)
-                k_u = unpack_tensor(past_key_values[id_u][0],self.k_bits,3)
-                k_l = (k_l+k_u)//2
-                k_l = pack_tensor(k_l,self.k_bits,3)
-                k_u = k_l
-                tr+=(((k_l,)+past_key_values[id_l][1:]),)
-                tr+=(((k_u,)+past_key_values[id_u][1:]),)
-            past_key_values = tl+tr
-            # debug_print(past_key_values)
-        # if self.idx>=len(self.test):
-        #     print('successfully finished')
-        #     exit(0)
-        # if self.cnt==self.test[self.idx]:
-        #     tmp_path = f'/new_data/yanghq/pkl32/{self.idx}.pkl'
-        #     with open(tmp_path, 'wb') as file:
-        #         pickle.dump(past_key_values, file)
-        #     print(tmp_path)
-        
         seq_length_with_past = seq_length
         past_key_values_length = 0
 

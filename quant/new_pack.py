@@ -121,13 +121,17 @@ def unpack_tensor(v_code: torch.FloatTensor,
 	packed_indices = [slice(None)] * len(new_shape)
 	packed_indices[pack_dim] = i
 	if pack_dim == 2:
-		unpacked_v_code = ((v_code[packed_indices] >> (j * bits)[None, None, :, None]).to(torch.int16)) & num
+		# unpacked_v_code = ((v_code[packed_indices] >> (j * bits)[None, None, :, None]).to(torch.int16)) & num
+		unpacked_v_code = ((v_code[packed_indices] >> (j * bits)[None, None, :, None]).to(torch.int32)) & num
 	elif pack_dim == 3:
-		unpacked_v_code = ((v_code[packed_indices] >> (j * bits)).to(torch.int16)) & num
+		# unpacked_v_code = ((v_code[packed_indices] >> (j * bits)).to(torch.int16)) & num
+		unpacked_v_code = ((v_code[packed_indices] >> (j * bits)).to(torch.int32)) & num
 	else:
 		raise NotImplementedError
 	return unpacked_v_code
 
+def debugging(x:torch.Tensor,bits=2,pack_dim=3):
+    return pack_tensor(unpack_tensor(x,bits,pack_dim),bits,pack_dim)
 
 @triton.jit
 def _pack_along_last_dim(

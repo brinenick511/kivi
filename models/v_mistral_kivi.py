@@ -871,13 +871,13 @@ class MistralModel_KIVI(MistralPreTrainedModel):
             for i in range(8):
                 id_l = 16+2*i
                 id_u = 16+2*i+1
-                k_l = unpack_tensor(past_key_values[id_l][0],self.k_bits,3)
-                k_u = unpack_tensor(past_key_values[id_u][0],self.k_bits,3)
+                k_l = unpack_tensor(past_key_values[id_l][4],self.v_bits,3)
+                k_u = unpack_tensor(past_key_values[id_u][4],self.v_bits,3)
                 k_l = (k_l+k_u)//2
-                k_l = pack_tensor(k_l,self.k_bits,3)
+                k_l = pack_tensor(k_l,self.v_bits,3)
                 k_u = k_l
-                tr+=(((k_l,)+past_key_values[id_l][1:]),)
-                tr+=(((k_u,)+past_key_values[id_u][1:]),)
+                tr+=((past_key_values[id_l][:4]+(k_l,)+past_key_values[id_l][5:]),)
+                tr+=((past_key_values[id_u][:4]+(k_u,)+past_key_values[id_u][5:]),)
             past_key_values = tl+tr
             # debug_print(past_key_values)
         # if self.idx>=len(self.test):
