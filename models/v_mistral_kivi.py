@@ -858,9 +858,6 @@ class MistralModel_KIVI(MistralPreTrainedModel):
         if seq_length !=1: # prefill
             self.cnt=0
             self.idx+=1
-            # ADDED: prefill merge int32
-            # for i in range(16):
-                
         else: # decode
             self.cnt+=1
         

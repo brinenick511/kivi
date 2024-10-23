@@ -185,6 +185,7 @@ if __name__ == '__main__':
             config.group_size = model_args.group_size
             config.residual_length = model_args.residual_length
             config.use_flash = True
+            config.anno = model_args.annotation
             model = MistralForCausalLM_KIVI.from_pretrained(
                 pretrained_model_name_or_path=model_args.model_name_or_path,
                 config=config,
