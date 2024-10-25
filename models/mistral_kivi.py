@@ -532,7 +532,7 @@ class MistralFlashAttention_KIVI(MistralAttention_KIVI):
                 query_states.transpose(1, 2), key_states_repeat.transpose(1, 2), 
                 value_states_repeat.transpose(1, 2), None, q_len, dropout=0.0
             )
-            # quantize
+            # INFO: quantize
             if key_states.shape[-2] % self.residual_length != 0:
                 if key_states.shape[-2] < self.residual_length:
                     key_states_quant = None
@@ -885,13 +885,16 @@ class MistralModel_KIVI(MistralPreTrainedModel):
                 if self.kv[0]:
                     k_l = unpack_tensor(past_key_values[id_l][0],self.k_bits,3)
                     k_u = unpack_tensor(past_key_values[id_u][0],self.k_bits,3)
-                    k_l = (k_l+k_u)//2
+                    # k_l = (k_l+k_u)//2
+                    k_l = ((k_l+k_u)/2).round().to(torch.int32)
                     k_l = pack_tensor(k_l,self.k_bits,3)
                     k_u = k_l
                 if self.kv[1]:
                     v_l = unpack_tensor(past_key_values[id_l][4],self.v_bits,3)
                     v_u = unpack_tensor(past_key_values[id_u][4],self.v_bits,3)
-                    v_l = (v_l+v_u)//2
+                    # v_l = (v_l+v_u)//2
+                    v_l = ((v_l+v_u)/2).round().to(torch.int32)
+                    print('ttt')
                     v_l = pack_tensor(v_l,self.v_bits,3)
                     v_u = v_l
                 if self.kv[0] and self.kv[1]:
@@ -904,7 +907,7 @@ class MistralModel_KIVI(MistralPreTrainedModel):
                     tm+=((past_key_values[id_l][:4]+(v_l,)+past_key_values[id_l][5:]),)
                     tm+=((past_key_values[id_u][:4]+(v_u,)+past_key_values[id_u][5:]),)
             past_key_values = tl+tm+tu
-            debug_print(past_key_values)
+            # debug_print(past_key_values)
         
         seq_length_with_past = seq_length
         past_key_values_length = 0
