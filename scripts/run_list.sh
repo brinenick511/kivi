@@ -7,6 +7,10 @@ model=/new_data/yanghq/models/mistralai/Mistral-7B-Instruct-v0.2
 anno_list=(${bit}_k_0_16 ${bit}_k_8_24 ${bit}_k_16_32 ${bit}_v_0_16 ${bit}_v_8_24 ${bit}_v_16_32 ${bit}_kv_0_16 ${bit}_kv_8_24 ${bit}_kv_16_32 )
 anno_list=(${bit}_k_0_16 ${bit}_k_8_24 ${bit}_k_16_32 ${bit}_v_0_16 ${bit}_v_8_24 ${bit}_v_16_32 ${bit}_kv_0_16 ${bit}_kv_8_24 ${bit}_kv_16_32 )
 anno_list=(${bit}_k_0_16 ${bit}_k_16_32 ${bit}_k_0_32 ${bit}_k_24_32 ${bit}_v_0_16 ${bit}_v_16_32 ${bit}_v_0_32 ${bit}_v_24_32 ${bit}_kv_0_16 ${bit}_kv_16_32 ${bit}_kv_0_32 ${bit}_kv_24_32 )
+anno_list=(${bit}_k_8_32 ${bit}_k_8_32 ${bit}_v_8_32 ${bit}_v_8_32 ${bit}_kv_8_32 ${bit}_kv_8_32 )
+anno_list=(${bit}_k_16_32 ${bit}_v_16_32 ${bit}_kv_16_32 )
+
+
 echo "numbers of array = ${#anno_list[*]}"
 
 for anno in ${anno_list[@]}

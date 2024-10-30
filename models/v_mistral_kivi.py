@@ -532,7 +532,7 @@ class MistralFlashAttention_KIVI(MistralAttention_KIVI):
                 query_states.transpose(1, 2), key_states_repeat.transpose(1, 2), 
                 value_states_repeat.transpose(1, 2), None, q_len, dropout=0.0
             )
-            # quantize
+            # INFO: quantize
             if key_states.shape[-2] % self.residual_length != 0:
                 if key_states.shape[-2] < self.residual_length:
                     key_states_quant = None
@@ -815,8 +815,21 @@ class MistralModel_KIVI(MistralPreTrainedModel):
         self.cnt=-1
         self.idx=-1
         # self.test=[]
-        self.test=[18, 6, 8, 10, 14, 10, 5, 14, 14, 4, 31, 31, 31, 17, 2, 31, 31, 31, 31, 3, 8]
-
+        # self.test=[18, 6, 8, 10, 14, 10, 5, 14, 14, 4, 31, 31, 31, 17, 2, 31, 31, 31, 31, 3, 8]
+        # ADDED: debugging
+        s=config.annotation
+        l = s.split('_')
+        assert len(l)==4, 'len(l)==4'
+        kv = l[1]
+        id_l = int(l[2])
+        id_u = int(l[3])
+        assert kv in ['0','k','v','kv'], f"{kv} in ['0','k','v','kv']"
+        assert (id_u-id_l)%2==0 and id_u>=id_l and id_u <= 32 and id_l >= 0, f"{id_l}, {id_u}"
+        self.kv = ['k' in kv, 'v' in kv]
+        self.id_l = id_l
+        self.id_u = id_u
+        assert self.k_bits==int(l[0])
+        
     def get_input_embeddings(self):
         return self.embed_tokens
 
@@ -863,30 +876,55 @@ class MistralModel_KIVI(MistralPreTrainedModel):
         
         # print(self.idx, self.cnt)
         if past_key_values is not None and self.cnt==1:
-            num_layer = 16
-            num_layer = 2
-            tl = past_key_values[:num_layer]
-            tr = ()
-            for i in range((32-num_layer)//2):
-                id_l = num_layer+2*i
-                id_u = num_layer+2*i+1
-                k_l = unpack_tensor(past_key_values[id_l][4],self.v_bits,3)
-                k_u = unpack_tensor(past_key_values[id_u][4],self.v_bits,3)
-                k_l = (k_l+k_u)//2
-                k_l = pack_tensor(k_l,self.v_bits,3)
-                k_u = k_l
-                tr+=((past_key_values[id_l][:4]+(k_l,)+past_key_values[id_l][5:]),)
-                tr+=((past_key_values[id_u][:4]+(k_u,)+past_key_values[id_u][5:]),)
-            past_key_values = tl+tr
+            tl = past_key_values[:self.id_l]
+            tm = ()
+            tu = past_key_values[self.id_u:]
+            bk = None
+            bv = None
+            bb = 2**(self.k_bits)
+            for i in range((self.id_u-self.id_l)//2):
+                id_l = self.id_l+2*i
+                id_u = self.id_l+2*i+1
+                
+                if self.kv[0]:
+                    k_l = unpack_tensor(past_key_values[id_l][0],self.k_bits,3)
+                    k_u = unpack_tensor(past_key_values[id_u][0],self.k_bits,3)
+                    # k_l = (k_l+k_u)//2
+                    # k_l = ((k_l+k_u)/2).round().to(torch.int32)
+                    # k_l = -((-k_l-k_u)//2)
+                    if bk is None:
+                        bk = torch.randint(0, 2, k_l.shape, dtype=torch.int32)
+                        bk = bk.to(k_l.device)
+                    k_l= (k_l+k_u+bk)//2
+                    k_l[k_l>=bb]=bb
+                    
+                    k_l = pack_tensor(k_l,self.k_bits,3)
+                    k_u = k_l
+                if self.kv[1]:
+                    v_l = unpack_tensor(past_key_values[id_l][4],self.v_bits,3)
+                    v_u = unpack_tensor(past_key_values[id_u][4],self.v_bits,3)
+                    # v_l = (v_l+v_u)//2
+                    # v_l = ((v_l+v_u)/2).round().to(torch.int32)
+                    # v_l = -((-v_l-v_u)//2)
+                    if bv is None:
+                        bv = torch.randint(0, 2, v_l.shape, dtype=torch.int32)
+                        bk = bk.to(v_l.device)
+                    v_l = (v_l+v_u)//2
+                    v_l[v_l>=bb]=bb
+                    
+                    v_l = pack_tensor(v_l,self.v_bits,3)
+                    v_u = v_l
+                if self.kv[0] and self.kv[1]:
+                    tm+=(((k_l,)+past_key_values[id_l][1:4]+(v_l,)+past_key_values[id_l][5:]),)
+                    tm+=(((k_u,)+past_key_values[id_u][1:4]+(v_u,)+past_key_values[id_u][5:]),)
+                elif self.kv[0]:
+                    tm+=(((k_l,)+past_key_values[id_l][1:]),)
+                    tm+=(((k_u,)+past_key_values[id_u][1:]),)
+                elif self.kv[1]:
+                    tm+=((past_key_values[id_l][:4]+(v_l,)+past_key_values[id_l][5:]),)
+                    tm+=((past_key_values[id_u][:4]+(v_u,)+past_key_values[id_u][5:]),)
+            past_key_values = tl+tm+tu
             # debug_print(past_key_values)
-        # if self.idx>=len(self.test):
-        #     print('successfully finished')
-        #     exit(0)
-        # if self.cnt==self.test[self.idx]:
-        #     tmp_path = f'/new_data/yanghq/pkl32/{self.idx}.pkl'
-        #     with open(tmp_path, 'wb') as file:
-        #         pickle.dump(past_key_values, file)
-        #     print(tmp_path)
         
         seq_length_with_past = seq_length
         past_key_values_length = 0

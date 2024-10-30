@@ -879,6 +879,9 @@ class MistralModel_KIVI(MistralPreTrainedModel):
             tl = past_key_values[:self.id_l]
             tm = ()
             tu = past_key_values[self.id_u:]
+            bk = None
+            bv = None
+            bb = 2**(self.k_bits)
             for i in range((self.id_u-self.id_l)//2):
                 id_l = self.id_l+2*i
                 id_u = self.id_l+2*i+1
@@ -886,15 +889,28 @@ class MistralModel_KIVI(MistralPreTrainedModel):
                     k_l = unpack_tensor(past_key_values[id_l][0],self.k_bits,3)
                     k_u = unpack_tensor(past_key_values[id_u][0],self.k_bits,3)
                     # k_l = (k_l+k_u)//2
-                    k_l = ((k_l+k_u)/2).round().to(torch.int32)
+                    # k_l = ((k_l+k_u)/2).round().to(torch.int32)
+                    # k_l = -((-k_l-k_u)//2)
+                    if bk is None:
+                        bk = torch.randint(0, 2, k_l.shape, dtype=torch.int32)
+                        bk = bk.to(k_l.device)
+                    k_l= (k_l+k_u+bk)//2
+                    k_l[k_l>=bb]=bb
+                    
                     k_l = pack_tensor(k_l,self.k_bits,3)
                     k_u = k_l
                 if self.kv[1]:
                     v_l = unpack_tensor(past_key_values[id_l][4],self.v_bits,3)
                     v_u = unpack_tensor(past_key_values[id_u][4],self.v_bits,3)
                     # v_l = (v_l+v_u)//2
-                    v_l = ((v_l+v_u)/2).round().to(torch.int32)
-                    print('ttt')
+                    # v_l = ((v_l+v_u)/2).round().to(torch.int32)
+                    # v_l = -((-v_l-v_u)//2)
+                    if bv is None:
+                        bv = torch.randint(0, 2, v_l.shape, dtype=torch.int32)
+                        bv = bv.to(v_l.device)
+                    v_l = (v_l+v_u)//2
+                    v_l[v_l>=bb]=bb
+                    
                     v_l = pack_tensor(v_l,self.v_bits,3)
                     v_u = v_l
                 if self.kv[0] and self.kv[1]:
