@@ -36,6 +36,8 @@ from transformers.models.mistral.configuration_mistral import *
 from transformers.models.mistral.modeling_mistral import *
 from transformers.modeling_attn_mask_utils import _prepare_4d_causal_attention_mask
 
+from dei_utils import dei_save
+
 _CONFIG_FOR_DOC = "MistralConfig"
 
 import pickle
@@ -110,7 +112,7 @@ class MistralAttention_KIVI(nn.Module):
     and "Generating Long Sequences with Sparse Transformers".
     """
 
-    def __init__(self, config: MistralConfig):
+    def __init__(self, config: MistralConfig, layer_idx: int):
         super().__init__()
         self.config = config
         self.hidden_size = config.hidden_size
@@ -125,6 +127,7 @@ class MistralAttention_KIVI(nn.Module):
         self.v_bits = config.v_bits
         self.group_size = config.group_size
         self.residual_length = config.residual_length
+        self.layer_idx = layer_idx
 
         if (self.head_dim * self.num_heads) != self.hidden_size:
             raise ValueError(
@@ -176,6 +179,7 @@ class MistralAttention_KIVI(nn.Module):
         query_states, key_states = apply_rotary_pos_emb(query_states, key_states, cos, sin, position_ids)
 
         if past_key_value is not None:
+            # INFO: decoding
             key_states_quant_trans = past_key_value[0]
             key_states_full = past_key_value[1]
             key_scale_trans = past_key_value[2]
@@ -271,7 +275,7 @@ class MistralAttention_KIVI(nn.Module):
                     value_mn = mn
         
         else:
-
+            # INFO: prefilling
             # quantize
             if key_states.shape[-2] % self.residual_length != 0:
                 if key_states.shape[-2] < self.residual_length:
@@ -301,12 +305,14 @@ class MistralAttention_KIVI(nn.Module):
                 value_states_full = value_states[:, :, -self.residual_length:, :].contiguous()
                 value_states_quant, value_scale, value_mn = triton_quantize_and_pack_along_last_dim(
                     value_states_quant, self.group_size, self.v_bits)
-        
+
             key_states = repeat_kv(key_states, self.num_key_value_groups)
             value_states = repeat_kv(value_states, self.num_key_value_groups)
-            attn_weights = torch.matmul(query_states, 
+            print(key_states.shape,value_states.shape)
+            print(attention_mask.shape)
+            attn_weights = torch.matmul(query_states,
                                         key_states.transpose(2, 3)) / math.sqrt(self.head_dim)
-
+            # dei_save(f'kivi2/s_{self.layer_idx}',attn_weights)
             if attn_weights.size() != (bsz, self.num_heads, q_len, kv_seq_len):
                 raise ValueError(
                     f"Attention weights should be of size {(bsz, self.num_heads, q_len, kv_seq_len)}, but is"
@@ -322,12 +328,13 @@ class MistralAttention_KIVI(nn.Module):
                 attn_weights = torch.max(
                     attn_weights, torch.tensor(torch.finfo(attn_weights.dtype).min)
                 )
-
+            dei_save(f'kivi2/m_{self.layer_idx}',attn_weights)
             # upcast attention to fp32
             attn_weights = nn.functional.softmax(
                 attn_weights, dim=-1, dtype=torch.float32
             ).to(query_states.dtype)
-
+            
+            # dei_save(f'kivi2/w_{self.layer_idx}', attn_weights)
             attn_output = torch.matmul(attn_weights, value_states) 
         past_key_value = (key_states_quant_trans, key_states_full, key_scale_trans, key_mn_trans, value_states_quant, value_states_full, value_scale, value_mn, kv_seq_len) if use_cache else None
         if attn_output.size() != (bsz, self.num_heads, q_len, self.head_dim):
@@ -715,9 +722,9 @@ class MistralDecoderLayer_KIVI(nn.Module):
         super().__init__()
         self.hidden_size = config.hidden_size
         self.self_attn = (
-            MistralAttention_KIVI(config=config)
+            MistralAttention_KIVI(config=config,layer_idx=layer_idx)
             if not getattr(config, "use_flash", False)
-            else MistralFlashAttention_KIVI(config)
+            else MistralFlashAttention_KIVI(config,layer_idx)
         )
         self.mlp = MistralMLP(config)
         self.input_layernorm = MistralRMSNorm(config.hidden_size, eps=config.rms_norm_eps)
@@ -814,21 +821,20 @@ class MistralModel_KIVI(MistralPreTrainedModel):
         # INFO: count
         self.cnt=-1
         self.idx=-1
-        # self.test=[]
-        # self.test=[18, 6, 8, 10, 14, 10, 5, 14, 14, 4, 31, 31, 31, 17, 2, 31, 31, 31, 31, 3, 8]
+        
         # ADDED: debugging
-        s=config.annotation
-        l = s.split('_')
-        assert len(l)==4, 'len(l)==4'
-        kv = l[1]
-        id_l = int(l[2])
-        id_u = int(l[3])
-        assert kv in ['0','k','v','kv'], f"{kv} in ['0','k','v','kv']"
-        assert (id_u-id_l)%2==0 and id_u>=id_l and id_u <= 32 and id_l >= 0, f"{id_l}, {id_u}"
-        self.kv = ['k' in kv, 'v' in kv]
-        self.id_l = id_l
-        self.id_u = id_u
-        assert self.k_bits==int(l[0])
+        # s=config.annotation
+        # l = s.split('_')
+        # assert len(l)==4, 'len(l)==4'
+        # kv = l[1]
+        # id_l = int(l[2])
+        # id_u = int(l[3])
+        # assert kv in ['0','k','v','kv'], f"{kv} in ['0','k','v','kv']"
+        # assert (id_u-id_l)%2==0 and id_u>=id_l and id_u <= 32 and id_l >= 0, f"{id_l}, {id_u}"
+        # self.kv = ['k' in kv, 'v' in kv]
+        # self.id_l = id_l
+        # self.id_u = id_u
+        # assert self.k_bits==int(l[0])
         
     def get_input_embeddings(self):
         return self.embed_tokens
@@ -873,56 +879,59 @@ class MistralModel_KIVI(MistralPreTrainedModel):
             self.idx+=1
         else: # decode
             self.cnt+=1
+        if self.cnt!=0 or self.idx==1:
+            print('\n\nover\n\n')
+            exit(0)
         
         # print(self.idx, self.cnt)
-        if past_key_values is not None and self.cnt==1:
-            tl = past_key_values[:self.id_l]
-            tm = ()
-            tu = past_key_values[self.id_u:]
-            bk = None
-            bv = None
-            bb = 2**(self.k_bits)
-            for i in range((self.id_u-self.id_l)//2):
-                id_l = self.id_l+2*i
-                id_u = self.id_l+2*i+1
-                if self.kv[0]:
-                    k_l = unpack_tensor(past_key_values[id_l][0],self.k_bits,3)
-                    k_u = unpack_tensor(past_key_values[id_u][0],self.k_bits,3)
-                    # k_l = (k_l+k_u)//2
-                    # k_l = ((k_l+k_u)/2).round().to(torch.int32)
-                    # k_l = -((-k_l-k_u)//2)
-                    if bk is None:
-                        bk = torch.randint(0, 2, k_l.shape, dtype=torch.int32)
-                        bk = bk.to(k_l.device)
-                    k_l= (k_l+k_u+bk)//2
-                    k_l[k_l>=bb]=bb
+        # if past_key_values is not None and self.cnt==1:
+        #     tl = past_key_values[:self.id_l]
+        #     tm = ()
+        #     tu = past_key_values[self.id_u:]
+        #     bk = None
+        #     bv = None
+        #     bb = 2**(self.k_bits)
+        #     for i in range((self.id_u-self.id_l)//2):
+        #         id_l = self.id_l+2*i
+        #         id_u = self.id_l+2*i+1
+        #         if self.kv[0]:
+        #             k_l = unpack_tensor(past_key_values[id_l][0],self.k_bits,3)
+        #             k_u = unpack_tensor(past_key_values[id_u][0],self.k_bits,3)
+        #             # k_l = (k_l+k_u)//2
+        #             # k_l = ((k_l+k_u)/2).round().to(torch.int32)
+        #             # k_l = -((-k_l-k_u)//2)
+        #             if bk is None:
+        #                 bk = torch.randint(0, 2, k_l.shape, dtype=torch.int32)
+        #                 bk = bk.to(k_l.device)
+        #             k_l= (k_l+k_u+bk)//2
+        #             k_l[k_l>=bb]=bb
                     
-                    k_l = pack_tensor(k_l,self.k_bits,3)
-                    k_u = k_l
-                if self.kv[1]:
-                    v_l = unpack_tensor(past_key_values[id_l][4],self.v_bits,3)
-                    v_u = unpack_tensor(past_key_values[id_u][4],self.v_bits,3)
-                    # v_l = (v_l+v_u)//2
-                    # v_l = ((v_l+v_u)/2).round().to(torch.int32)
-                    # v_l = -((-v_l-v_u)//2)
-                    if bv is None:
-                        bv = torch.randint(0, 2, v_l.shape, dtype=torch.int32)
-                        bv = bv.to(v_l.device)
-                    v_l = (v_l+v_u)//2
-                    v_l[v_l>=bb]=bb
+        #             k_l = pack_tensor(k_l,self.k_bits,3)
+        #             k_u = k_l
+        #         if self.kv[1]:
+        #             v_l = unpack_tensor(past_key_values[id_l][4],self.v_bits,3)
+        #             v_u = unpack_tensor(past_key_values[id_u][4],self.v_bits,3)
+        #             # v_l = (v_l+v_u)//2
+        #             # v_l = ((v_l+v_u)/2).round().to(torch.int32)
+        #             # v_l = -((-v_l-v_u)//2)
+        #             if bv is None:
+        #                 bv = torch.randint(0, 2, v_l.shape, dtype=torch.int32)
+        #                 bv = bv.to(v_l.device)
+        #             v_l = (v_l+v_u)//2
+        #             v_l[v_l>=bb]=bb
                     
-                    v_l = pack_tensor(v_l,self.v_bits,3)
-                    v_u = v_l
-                if self.kv[0] and self.kv[1]:
-                    tm+=(((k_l,)+past_key_values[id_l][1:4]+(v_l,)+past_key_values[id_l][5:]),)
-                    tm+=(((k_u,)+past_key_values[id_u][1:4]+(v_u,)+past_key_values[id_u][5:]),)
-                elif self.kv[0]:
-                    tm+=(((k_l,)+past_key_values[id_l][1:]),)
-                    tm+=(((k_u,)+past_key_values[id_u][1:]),)
-                elif self.kv[1]:
-                    tm+=((past_key_values[id_l][:4]+(v_l,)+past_key_values[id_l][5:]),)
-                    tm+=((past_key_values[id_u][:4]+(v_u,)+past_key_values[id_u][5:]),)
-            past_key_values = tl+tm+tu
+        #             v_l = pack_tensor(v_l,self.v_bits,3)
+        #             v_u = v_l
+        #         if self.kv[0] and self.kv[1]:
+        #             tm+=(((k_l,)+past_key_values[id_l][1:4]+(v_l,)+past_key_values[id_l][5:]),)
+        #             tm+=(((k_u,)+past_key_values[id_u][1:4]+(v_u,)+past_key_values[id_u][5:]),)
+        #         elif self.kv[0]:
+        #             tm+=(((k_l,)+past_key_values[id_l][1:]),)
+        #             tm+=(((k_u,)+past_key_values[id_u][1:]),)
+        #         elif self.kv[1]:
+        #             tm+=((past_key_values[id_l][:4]+(v_l,)+past_key_values[id_l][5:]),)
+        #             tm+=((past_key_values[id_u][:4]+(v_u,)+past_key_values[id_u][5:]),)
+        #     past_key_values = tl+tm+tu
             # debug_print(past_key_values)
         
         seq_length_with_past = seq_length
@@ -1014,6 +1023,7 @@ class MistralModel_KIVI(MistralPreTrainedModel):
                 )
 
             hidden_states = layer_outputs[0]
+            dei_save(f'kivi2/o_{idx}',hidden_states)
 
             if use_cache:
                 next_decoder_cache += (layer_outputs[2 if output_attentions else 1],)
