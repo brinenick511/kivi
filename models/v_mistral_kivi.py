@@ -819,15 +819,19 @@ class MistralModel_KIVI(MistralPreTrainedModel):
         # ADDED: debugging
         s=config.annotation
         l = s.split('_')
-        assert len(l)==4, 'len(l)==4'
-        kv = l[1]
-        id_l = int(l[2])
-        id_u = int(l[3])
-        assert kv in ['0','k','v','kv'], f"{kv} in ['0','k','v','kv']"
+        assert len(l)>=5, 'len(l)>=4'
+        # kv = l[1]
+        # assert kv in ['0','k','v','kv'], f"{kv} in ['0','k','v','kv']"
+        # self.kv = ['k' in kv, 'v' in kv]
+        id_l = int(l[1])
+        id_u = int(l[2])
         assert (id_u-id_l)%2==0 and id_u>=id_l and id_u <= 32 and id_l >= 0, f"{id_l}, {id_u}"
-        self.kv = ['k' in kv, 'v' in kv]
-        self.id_l = id_l
-        self.id_u = id_u
+        self.k = [id_l,id_u]
+        id_l = int(l[3])
+        id_u = int(l[4])
+        assert (id_u-id_l)%2==0 and id_u>=id_l and id_u <= 32 and id_l >= 0, f"{id_l}, {id_u}"
+        self.v = [id_l,id_u]
+        self.mode = str(l[-1]) if len(l)>=6 else -1
         assert self.k_bits==int(l[0])
         
     def get_input_embeddings(self):
@@ -873,59 +877,110 @@ class MistralModel_KIVI(MistralPreTrainedModel):
             self.idx+=1
         else: # decode
             self.cnt+=1
-        
+        # if self.cnt==1:
+        #     print('\n\ndebugging\n\ndebugging\n\nover\n\n')
+        #     exit(0)
         # print(self.idx, self.cnt)
-        if past_key_values is not None and self.cnt==1:
-            tl = past_key_values[:self.id_l]
+        if past_key_values is not None and self.cnt==1 and (self.k[0]!=self.k[1] or self.v[0]!=self.v[1]):
+            if self.k[0]==self.k[1]:
+                all_id_l=min(self.v)
+                all_id_u=max(self.v)
+            elif self.v[0]==self.v[1]:
+                all_id_l=min(self.k)
+                all_id_u=max(self.k)
+            else:
+                all_id_l=min(self.v+self.k)
+                all_id_u=max(self.v+self.k)
+            tl = past_key_values[:all_id_l]
             tm = ()
-            tu = past_key_values[self.id_u:]
-            bk = None
-            bv = None
-            bb = 2**(self.k_bits)
-            for i in range((self.id_u-self.id_l)//2):
-                id_l = self.id_l+2*i
-                id_u = self.id_l+2*i+1
-                
-                if self.kv[0]:
+            tu = past_key_values[all_id_u:]
+            # bk = None
+            # bv = None
+            # bb = 2**(self.k_bits)
+            for i in range((all_id_u-all_id_l)//2):
+                id_l = all_id_l+2*i
+                id_u = all_id_l+2*i+1
+                flag_k = bool(id_l>=self.k[0] and id_u<=self.k[1])
+                flag_v = bool(id_l>=self.v[0] and id_u<=self.v[1])
+                # print(self.mode, id_l, id_u,flag_k, flag_v)
+                if flag_k:
                     k_l = unpack_tensor(past_key_values[id_l][0],self.k_bits,3)
                     k_u = unpack_tensor(past_key_values[id_u][0],self.k_bits,3)
-                    # k_l = (k_l+k_u)//2
+                    if self.mode==0 or self.mode=='0' or self.mode==1 or self.mode=='1':
+                        k_l = (k_l+k_u)//2
+                    elif self.mode==2 or self.mode=='2' or self.mode==3 or self.mode=='3':
+                        k_l = -((-k_l-k_u)//2)
+                    elif self.mode==4 or self.mode=='4':
+                        k_l = (0.55*k_l+0.45*k_u).round().to(torch.int32)
+                    elif self.mode==5 or self.mode=='5':
+                        k_l = (0.45*k_l+0.55*k_u).round().to(torch.int32)
                     # k_l = ((k_l+k_u)/2).round().to(torch.int32)
-                    # k_l = -((-k_l-k_u)//2)
-                    if bk is None:
-                        bk = torch.randint(0, 2, k_l.shape, dtype=torch.int32)
-                        bk = bk.to(k_l.device)
-                    k_l= (k_l+k_u+bk)//2
-                    k_l[k_l>=bb]=bb
-                    
+                    # if bk is None:
+                    #     bk = torch.randint(0, 2, k_l.shape, dtype=torch.int32)
+                    #     bk = bk.to(k_l.device)
+                    # k_l= (k_l+k_u+bk)//2
+                    # k_l[k_l>=bb]=
                     k_l = pack_tensor(k_l,self.k_bits,3)
                     k_u = k_l
-                if self.kv[1]:
+                if flag_v:
                     v_l = unpack_tensor(past_key_values[id_l][4],self.v_bits,3)
                     v_u = unpack_tensor(past_key_values[id_u][4],self.v_bits,3)
-                    # v_l = (v_l+v_u)//2
+                    if self.mode==0 or self.mode=='0' or self.mode==1 or self.mode=='1':
+                        v_l = (v_l+v_u)//2
+                    elif self.mode==2 or self.mode=='2' or self.mode==3 or self.mode=='3':
+                        v_l = -((-v_l-v_u)//2)
+                    elif self.mode==4 or self.mode=='4':
+                        v_l = (0.55*v_l+0.45*v_u).round().to(torch.int32)
+                    elif self.mode==5 or self.mode=='5':
+                        v_l = (0.45*v_l+0.55*v_u).round().to(torch.int32)
                     # v_l = ((v_l+v_u)/2).round().to(torch.int32)
-                    # v_l = -((-v_l-v_u)//2)
-                    if bv is None:
-                        bv = torch.randint(0, 2, v_l.shape, dtype=torch.int32)
-                        bk = bk.to(v_l.device)
-                    v_l = (v_l+v_u)//2
-                    v_l[v_l>=bb]=bb
-                    
+                    # if bv is None:
+                    #     bv = torch.randint(0, 2, v_l.shape, dtype=torch.int32)
+                    #     bk = bk.to(v_l.device)
+                    # v_l = (v_l+v_u)//2
+                    # v_l[v_l>=bb]=bb
                     v_l = pack_tensor(v_l,self.v_bits,3)
                     v_u = v_l
-                if self.kv[0] and self.kv[1]:
+                if flag_k and flag_v:
                     tm+=(((k_l,)+past_key_values[id_l][1:4]+(v_l,)+past_key_values[id_l][5:]),)
                     tm+=(((k_u,)+past_key_values[id_u][1:4]+(v_u,)+past_key_values[id_u][5:]),)
-                elif self.kv[0]:
+                elif flag_k:
                     tm+=(((k_l,)+past_key_values[id_l][1:]),)
                     tm+=(((k_u,)+past_key_values[id_u][1:]),)
-                elif self.kv[1]:
+                elif flag_v:
                     tm+=((past_key_values[id_l][:4]+(v_l,)+past_key_values[id_l][5:]),)
                     tm+=((past_key_values[id_u][:4]+(v_u,)+past_key_values[id_u][5:]),)
+                if self.mode==1 or self.mode=='1':
+                    p_l = tm[-2]
+                    p_u = tm[-1]
+                    if flag_k and flag_v:
+                        p_l = p_l[:3]+((p_l[3]+0.25*p_l[2]),)+p_l[4:7]+((p_l[7]+0.25*p_l[6]),)+(p_l[-1],)
+                        p_u = p_u[:3]+((p_u[3]+0.25*p_u[2]),)+p_u[4:7]+((p_u[7]+0.25*p_u[6]),)+(p_u[-1],)
+                    elif flag_k:
+                        p_l = p_l[:3]+((p_l[3]+0.25*p_l[2]),)+p_l[4:]
+                        p_u = p_u[:3]+((p_u[3]+0.25*p_u[2]),)+p_u[4:]
+                    elif flag_v:
+                        p_l = p_l[:7]+((p_l[7]+0.25*p_l[6]),)+(p_l[-1],)
+                        p_u = p_u[:7]+((p_u[7]+0.25*p_u[6]),)+(p_u[-1],)
+                    tm = tm[:-2]+(p_l,p_u,)
+                elif self.mode==3 or self.mode=='3':
+                    p_l = tm[-2]
+                    p_u = tm[-1]
+                    if flag_k and flag_v:
+                        p_l = p_l[:3]+((p_l[3]-0.25*p_l[2]),)+p_l[4:7]+((p_l[7]-0.25*p_l[6]),)+(p_l[-1],)
+                        p_u = p_u[:3]+((p_u[3]-0.25*p_u[2]),)+p_u[4:7]+((p_u[7]-0.25*p_u[6]),)+(p_u[-1],)
+                    elif flag_k:
+                        p_l = p_l[:3]+((p_l[3]-0.25*p_l[2]),)+p_l[4:]
+                        p_u = p_u[:3]+((p_u[3]-0.25*p_u[2]),)+p_u[4:]
+                    elif flag_v:
+                        p_l = p_l[:7]+((p_l[7]-0.25*p_l[6]),)+(p_l[-1],)
+                        p_u = p_u[:7]+((p_u[7]-0.25*p_u[6]),)+(p_u[-1],)
+                    tm = tm[:-2]+(p_l,p_u,)
+                
             past_key_values = tl+tm+tu
             # debug_print(past_key_values)
-        
+            # debug_print(past_key_values[16])
+            # debug_print(past_key_values[30])
         seq_length_with_past = seq_length
         past_key_values_length = 0
 

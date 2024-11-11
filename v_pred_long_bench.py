@@ -179,13 +179,13 @@ if __name__ == '__main__':
             # for key in d_map.keys():
             #     if '16' in key or '15' in key or '14' in key:
             #         d_map[key] = 1
-            # from models.v_mistral_kivi import MistralForCausalLM_KIVI
-            from models.mistral_kivi import MistralForCausalLM_KIVI
+            from models.v_mistral_kivi import MistralForCausalLM_KIVI
+            # from models.mistral_kivi import MistralForCausalLM_KIVI
             config.k_bits = model_args.k_bits
             config.v_bits = model_args.v_bits
             config.group_size = model_args.group_size
             config.residual_length = model_args.residual_length
-            config.use_flash = False
+            config.use_flash = True
             config.annotation = str(model_args.annotation).strip()
             model = MistralForCausalLM_KIVI.from_pretrained(
                 pretrained_model_name_or_path=model_args.model_name_or_path,
@@ -205,8 +205,8 @@ if __name__ == '__main__':
                 cache_dir=training_args.cache_dir,
                 torch_dtype=dtype,
                 low_cpu_mem_usage=True,
-                # attn_implementation="flash_attention_2",
-                attn_implementation="sdpa",
+                attn_implementation="flash_attention_2",
+                # attn_implementation="sdpa",
                 device_map="auto",
             )
 
@@ -225,12 +225,11 @@ if __name__ == '__main__':
     else:
         datasets = ["triviaqa", "qasper", "trec", "samsum", "lcc", "repobench-p", "qmsum", "multi_news"]
         datasets = ["lcc", "repobench-p", "trec", "2wikimqa", "gov_report"]
-        # datasets = ["lcc",]
-        # datasets = ["repobench-p",]
-        datasets = ["lcc", "repobench-p", "trec", "2wikimqa", "gov_report", "multifieldqa_zh"]
-        datasets = ["2wikimqa", "lcc", "repobench-p", "trec", "gov_report", "multifieldqa_zh"]
-        datasets = ["multifieldqa_zh", "trec"]
-        datasets = ["narrativeqa"]
+        datasets = ['multifieldqa_zh','trec','passage_retrieval_zh','multi_news',]
+        datasets = ['multifieldqa_zh','trec',]
+        # datasets = ['multi_news',]
+        if model_args.k_bits >= 16:
+            datasets = ['passage_retrieval_zh','multi_news',]
     # we design specific prompt format and max generation length for each task, feel free to modify them to optimize model output
     dataset2prompt = json.load(open("config/dataset2prompt.json", "r"))
     dataset2maxlen = json.load(open("config/dataset2maxlen.json", "r"))

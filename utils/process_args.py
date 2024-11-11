@@ -162,7 +162,8 @@ def define_path(model_name, model_path, k_bits, v_bits, group_size, residual_len
         if model_path is None:
             return 'ERROR'
         model_name = model_path.split("/")[-1]
-    s = f'{model_name}_{k_bits}bits'
+    # s = f'{model_name}_{k_bits}bits'
+    s = f'{model_name}'
     # s += f'_g{group_size}_r{residual_length}'
     if annotation is not None and annotation != ' ' and annotation != '':
         s += f'_{annotation}'

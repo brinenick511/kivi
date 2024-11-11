@@ -3,6 +3,7 @@ import triton.language as tl
 import random
 import numpy as np
 import torch
+import dei_utils
 
 
 def quant_and_pack_kcache(k: torch.FloatTensor, group_size: int, bits: int):
@@ -242,7 +243,11 @@ def triton_quantize_and_pack_along_last_dim(data: torch.Tensor, group_size: int,
 	scale = (mx - mn) / (2 ** bit - 1)
 	data = data - mn.unsqueeze(-1)
 	data.div_(scale.unsqueeze(-1))
-	data = data.clamp_(0, 2 ** bit - 1).round_().to(torch.int32)
+	data = data.clamp_(0, 2 ** bit - 1)
+	# t=dei_utils.dei_load('test')
+	# t=torch.stack([t,data])
+	# dei_utils.dei_save('test',t)
+	data = data.round_().to(torch.int32)
 	data = data.view(-1, T)
 	feat_per_int = 32 // bit
 	packshape = (np.prod(shape[:-1]), shape[-1] // feat_per_int,)

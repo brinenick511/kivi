@@ -7,6 +7,7 @@ import sys
 import argparse
 from tqdm import tqdm
 import os
+import json
 
 from utils.process_args import process_args, define_path
 
@@ -50,10 +51,17 @@ if __name__ == "__main__":
         model_name,None,model_args.k_bits,model_args.v_bits,
         model_args.group_size,model_args.residual_length,model_args.annotation)
     path = f'pred/{output_path}/result.json'
+    
+    l = model_args.annotation.split('_')
+    k = (int(l[2])-int(l[1]))//2
+    v = (int(l[4])-int(l[3]))//2
+    m = int(l[-1])
+    ml=['floor','f+cali','ceil','c+ceil','55/45','44/55','NONE',]
+    
     if os.path.exists(path):
         with open(path, 'r', encoding='utf-8') as file:
             file_content = file.read()
-        send_qq_email(f'{output_path}: Success',f'{output_path}\n'+file_content)
+        send_qq_email(f'{output_path}: Success',f'{k},{v},{m}\n{ml[m]}\n\n{output_path}\n'+file_content)
         print(f'{output_path}: Success')
     else:
         send_qq_email(f'{output_path}: Fail',f'{output_path}: Fail')

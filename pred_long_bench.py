@@ -215,8 +215,8 @@ if __name__ == '__main__':
 
     model.eval()
     max_length = model2maxlen[model_name]
-    max_length = 5000
-    max_length = 100
+    # max_length = 5000
+    # max_length = 100
     if data_args.e:
         datasets = ["qasper", "multifieldqa_en", "hotpotqa", "2wikimqa", "gov_report", "multi_news", 
                     "trec", "triviaqa", "samsum", "passage_count", "passage_retrieval_en", "lcc", "repobench-p"]

@@ -308,8 +308,8 @@ class MistralAttention_KIVI(nn.Module):
 
             key_states = repeat_kv(key_states, self.num_key_value_groups)
             value_states = repeat_kv(value_states, self.num_key_value_groups)
-            print(key_states.shape,value_states.shape)
-            print(attention_mask.shape)
+            # print(key_states.shape,value_states.shape)
+            # print(attention_mask.shape)
             attn_weights = torch.matmul(query_states,
                                         key_states.transpose(2, 3)) / math.sqrt(self.head_dim)
             # dei_save(f'kivi2/s_{self.layer_idx}',attn_weights)
@@ -328,7 +328,7 @@ class MistralAttention_KIVI(nn.Module):
                 attn_weights = torch.max(
                     attn_weights, torch.tensor(torch.finfo(attn_weights.dtype).min)
                 )
-            dei_save(f'kivi2/m_{self.layer_idx}',attn_weights)
+            # dei_save(f'kivi2/m_{self.layer_idx}',attn_weights)
             # upcast attention to fp32
             attn_weights = nn.functional.softmax(
                 attn_weights, dim=-1, dtype=torch.float32
