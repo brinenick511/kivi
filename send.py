@@ -37,7 +37,7 @@ def send_qq_email(subject='### GPU提醒 ###', body='<=GPU提醒=>'):
             server.login(sender_email, password)
             server.sendmail(sender_email, [msg['To']], msg.as_string())
         print('邮件发送成功')
-        sys.exit(0)
+        # sys.exit(0)
     except smtplib.SMTPException as e:
         print('邮件发送失败:', str(e))
         
@@ -56,12 +56,31 @@ if __name__ == "__main__":
     k = (int(l[2])-int(l[1]))//2
     v = (int(l[4])-int(l[3]))//2
     m = int(l[-1])
-    ml=['floor','f+cali','ceil','c+ceil','55/45','44/55','NONE',]
+    ml = 10*['-1',]+[.9,.8,.6,.4,.2,.1]
+    ml[:7]=['floor','f+cali','ceil','c+ceil','55/45','44/55','NONE',]
     
     if os.path.exists(path):
         with open(path, 'r', encoding='utf-8') as file:
+            s=f'( {k},{v} ), {m}\n{ml[m]}\n\n{output_path}\n'
             file_content = file.read()
-        send_qq_email(f'{output_path}: Success',f'{k},{v},{m}\n{ml[m]}\n\n{output_path}\n'+file_content)
+            data = json.loads(file_content)
+            ol = []
+            kl = list(data.keys())
+            vl = list(data.values())
+            avg=0.0
+            tl=['tre','zh','news']
+            for i in range(len(vl)):
+                vl[i] = int(100*float(vl[i]))/100
+                avg+=vl[i]
+                for j in range(len(tl)):
+                    if tl[j] in kl[i]:
+                        ol.append(i)
+            for i in ol:
+                s=f'{s}\n"{kl[i]}": {vl[i]}'
+            avg=int(100*avg/len(ol))/100
+            s=f'{s}\n"average": {avg}'
+        # send_qq_email(f'{output_path}: Success',f'{k},{v},{m}\n{ml[m]}\n\n{output_path}\n'+file_content)
+        send_qq_email(f'{output_path}: Success',f'{s}\n\n\n{file_content}')
         print(f'{output_path}: Success')
     else:
         send_qq_email(f'{output_path}: Fail',f'{output_path}: Fail')

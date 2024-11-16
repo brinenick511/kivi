@@ -833,6 +833,10 @@ class MistralModel_KIVI(MistralPreTrainedModel):
         self.v = [id_l,id_u]
         self.mode = str(l[-1]) if len(l)>=6 else -1
         assert self.k_bits==int(l[0])
+    def moding(self, num=None):
+        if num is None:
+            return int(self.mode)
+        return bool(int(self.mode) == num)
         
     def get_input_embeddings(self):
         return self.embed_tokens
@@ -882,6 +886,9 @@ class MistralModel_KIVI(MistralPreTrainedModel):
         #     exit(0)
         # print(self.idx, self.cnt)
         if past_key_values is not None and self.cnt==1 and (self.k[0]!=self.k[1] or self.v[0]!=self.v[1]):
+            g_l = 10*[-1,]+[.9,.8,.6,.4,.2,.1]
+            gamma = g_l[self.moding()]
+            # print('gamma:', gamma)
             if self.k[0]==self.k[1]:
                 all_id_l=min(self.v)
                 all_id_u=max(self.v)
@@ -914,6 +921,8 @@ class MistralModel_KIVI(MistralPreTrainedModel):
                         k_l = (0.55*k_l+0.45*k_u).round().to(torch.int32)
                     elif self.mode==5 or self.mode=='5':
                         k_l = (0.45*k_l+0.55*k_u).round().to(torch.int32)
+                    else:
+                        k_l = (gamma*k_l + (1-gamma)*k_u).round().to(torch.int32)
                     # k_l = ((k_l+k_u)/2).round().to(torch.int32)
                     # if bk is None:
                     #     bk = torch.randint(0, 2, k_l.shape, dtype=torch.int32)
@@ -933,6 +942,8 @@ class MistralModel_KIVI(MistralPreTrainedModel):
                         v_l = (0.55*v_l+0.45*v_u).round().to(torch.int32)
                     elif self.mode==5 or self.mode=='5':
                         v_l = (0.45*v_l+0.55*v_u).round().to(torch.int32)
+                    else:
+                        v_l = (gamma*v_l + (1-gamma)*v_u).round().to(torch.int32)
                     # v_l = ((v_l+v_u)/2).round().to(torch.int32)
                     # if bv is None:
                     #     bv = torch.randint(0, 2, v_l.shape, dtype=torch.int32)
@@ -950,6 +961,7 @@ class MistralModel_KIVI(MistralPreTrainedModel):
                 elif flag_v:
                     tm+=((past_key_values[id_l][:4]+(v_l,)+past_key_values[id_l][5:]),)
                     tm+=((past_key_values[id_u][:4]+(v_u,)+past_key_values[id_u][5:]),)
+                
                 if self.mode==1 or self.mode=='1':
                     p_l = tm[-2]
                     p_u = tm[-1]

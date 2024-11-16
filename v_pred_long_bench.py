@@ -226,7 +226,7 @@ if __name__ == '__main__':
         datasets = ["triviaqa", "qasper", "trec", "samsum", "lcc", "repobench-p", "qmsum", "multi_news"]
         datasets = ["lcc", "repobench-p", "trec", "2wikimqa", "gov_report"]
         datasets = ['multifieldqa_zh','trec','passage_retrieval_zh','multi_news',]
-        datasets = ['multifieldqa_zh','trec',]
+        datasets = ['multifieldqa_zh','trec','multi_news',]
         # datasets = ['multi_news',]
         if model_args.k_bits >= 16:
             datasets = ['passage_retrieval_zh','multi_news',]
