@@ -53,15 +53,10 @@ if __name__ == "__main__":
     path = f'pred/{output_path}/result.json'
     
     l = model_args.annotation.split('_')
-    k = (int(l[2])-int(l[1]))//2
-    v = (int(l[4])-int(l[3]))//2
-    m = int(l[-1])
-    ml = 10*['-1',]+[.9,.8,.6,.4,.2,.1]
-    ml[:7]=['floor','f+cali','ceil','c+ceil','55/45','44/55','NONE',]
     
     if os.path.exists(path):
         with open(path, 'r', encoding='utf-8') as file:
-            s=f'( {k},{v} ), {m}\n{ml[m]}\n\n{output_path}\n'
+            s=f'q = \t( {l[0]}, {l[1]} )\nm = \t( {l[2]}, {l[3]} )\n\n{output_path}\n'
             file_content = file.read()
             data = json.loads(file_content)
             ol = []
