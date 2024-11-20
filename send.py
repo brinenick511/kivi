@@ -8,6 +8,8 @@ import argparse
 from tqdm import tqdm
 import os
 import json
+import csv
+from filelock import FileLock
 
 from utils.process_args import process_args, define_path
 
@@ -70,10 +72,25 @@ if __name__ == "__main__":
                 for j in range(len(tl)):
                     if tl[j] in kl[i]:
                         ol.append(i)
+            new_data = l
             for i in ol:
                 s=f'{s}\n"{kl[i]}": {vl[i]}'
+                new_data+=[vl[i],]
             avg=int(100*avg/len(ol))/100
             s=f'{s}\n"average": {avg}'
+            file_name = '/new_data/yanghq/ans.csv'
+            lock_file = file_name + '.lock'  # 锁文件名
+            lock = FileLock(lock_file)
+            with lock:
+                try:
+                    with open(file_name, 'x', newline='') as ffile:
+                        writer = csv.writer(ffile)
+                        writer.writerow(['kq', 'vq', 'km', 'vm', 'trec', 'mqazh'])
+                except FileExistsError:
+                    pass
+                with open(file_name, 'a', newline='') as ffile:
+                    writer = csv.writer(ffile)
+                    writer.writerow(new_data)
         # send_qq_email(f'{output_path}: Success',f'{k},{v},{m}\n{ml[m]}\n\n{output_path}\n'+file_content)
         send_qq_email(f'{output_path}: Success',f'{s}\n\n\n{file_content}')
         print(f'{output_path}: Success')

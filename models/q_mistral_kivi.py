@@ -878,8 +878,8 @@ class MistralModel_KIVI(MistralPreTrainedModel):
             self.idx+=1
         else: # decode
             self.cnt+=1
-        if self.idx==5:
-            exit(0)
+        # if self.idx==5:
+        #     exit(0)
         torch.cuda.empty_cache()
         # print(self.idx, self.cnt)
         
