@@ -910,7 +910,7 @@ class MistralModel_KIVI(MistralPreTrainedModel):
             for i in range(32):
                 flag_k = bool(i>=k_id)
                 flag_v = bool(i>=v_id)
-                print(i,flag_k,flag_v)
+                # print(i,flag_k,flag_v)
                 p_l = past_key_values[i]
                 if flag_k and flag_v:
                     p_l = p_l[:2]+((p_l[2]-1/3*p_l[2]),(p_l[3]+1/6*p_l[2]),)+p_l[4:6]+((p_l[6]-1/3*p_l[6]),(p_l[7]+1/6*p_l[6]),)+p_l[8:]
