@@ -6,6 +6,14 @@ model=/new_data/yanghq/models/mistralai/Mistral-7B-Instruct-v0.2
 # anno_list=(2_30_32_16_32_10 2_30_32_16_32_11 2_30_32_16_32_12 2_30_32_16_32_13 2_30_32_16_32_14 2_30_32_16_32_15 2_32_32_14_32_10 2_32_32_14_32_11 2_32_32_14_32_12 2_32_32_14_32_13 2_32_32_14_32_14 2_32_32_14_32_15 )
 IFS=',' read -r -a anno_array <<< "$anno_list"
 
+cleanup() {
+    echo "正在终止 GPU #${gpuid} 的所有任务..."
+    pkill -P $$  # 终止当前脚本的所有子进程
+    exit 1
+}
+
+trap cleanup SIGINT
+
 sleep 1
 echo "num_task = ${#anno_array[*]} in gpu#${gpuid}"
 sleep 1
@@ -46,3 +54,5 @@ do
         --annotation $anno
 
 done
+
+wait

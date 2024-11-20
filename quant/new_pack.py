@@ -88,7 +88,8 @@ def pack_tensor(data, bits, pack_dim):
 	# Pack
 	shape = data.shape
 	feat_per_int = 32 // bits
-	assert bits in [2,4,8], "Only 2, 4, 8 bits are supported"
+	# assert bits in [2,4,8], "Only 2, 4, 8 bits are supported"
+	assert bits in [1,2,4,8], "Only 2, 4, 8 bits are supported"
 	assert shape[pack_dim] % feat_per_int == 0, "Dimension length must be divisible by number of features per int"
 	# BS, nh, T, nd // 16 # 16 is for 2bit
 	code = torch.zeros(shape[:pack_dim] + (shape[pack_dim] // feat_per_int,)+shape[pack_dim+1:], 
@@ -111,7 +112,8 @@ def pack_tensor(data, bits, pack_dim):
 def unpack_tensor(v_code: torch.FloatTensor, 
 				  bits: int, 
 				  pack_dim: int):
-	assert bits in [2,4,8]
+	# assert bits in [2,4,8]
+	assert bits in [1,2,4,8]
 	shape = v_code.shape
 	feat_per_int = 32 // bits
 	new_shape = shape[:pack_dim] + (shape[pack_dim] * feat_per_int,) + shape[pack_dim+1:]

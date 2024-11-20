@@ -434,6 +434,77 @@ __global__ void bgemv2_kernel_outer_dim(
     }
 }
 
+__global__ void bgemv1_kernel_outer_dim(
+  const half* _inputs, const uint32_t* _weight, const half* _zeros, const half* _scale, half* _outputs, 
+  const int IC, const int OC, const int group_size, const int nh, const bool mqa){
+    const int bit = 1;
+    const int pack_factor = 32; // 32 weights per uint32
+    const int batch_idx = blockIdx.x;
+    const int packed_oc_idx = blockIdx.y * blockDim.y + threadIdx.y; 
+    const int oc_start_idx = packed_oc_idx * pack_factor;
+    const int group_idx = oc_start_idx / group_size; 
+    const int ICR = IC;
+    const half* inputs = _inputs + batch_idx * ICR;
+    half* outputs = _outputs + batch_idx * OC;
+    int _batch_idx;
+    if (mqa){
+      _batch_idx = batch_idx / nh;
+    }else{
+      _batch_idx = batch_idx;
+    }
+    const uint32_t*  weight = _weight + _batch_idx * OC * IC / pack_factor;
+    const half* scaling_factors = _scale + _batch_idx * OC * IC / group_size;
+    const half* zeros = _zeros + _batch_idx * OC * IC / group_size;
+    const int TILE_DIM = 128;
+    const int num = 0x01; // Mask for 1-bit extraction
+    // Accumulate partial sums
+    float psum[pack_factor]{};
+    for (int k=0; k < (ICR + TILE_DIM - 1) / TILE_DIM; k++){
+      uint32_t qw[4]{};
+      half cscale[4]{};
+      half czero[4]{};
+      half inp[4]{};
+      int weight_offset = packed_oc_idx * ICR + k * TILE_DIM + threadIdx.x*4;
+      int scale_mn_offset = group_idx * ICR + k * TILE_DIM + threadIdx.x*4;
+      int inputs_ptr_delta = k * TILE_DIM + threadIdx.x * 4; 
+      for (int i=0; i<4; i++){
+        if (weight_offset + i < OC * ICR / pack_factor)
+          qw[i] = *(weight + weight_offset + i);
+        if (scale_mn_offset + i < OC * ICR / group_size){
+          cscale[i] = *(scaling_factors + scale_mn_offset + i);
+          czero[i] = *(zeros + scale_mn_offset + i);}
+        if (inputs_ptr_delta + i < ICR)
+          inp[i] = *(inputs + inputs_ptr_delta + i);
+      }
+      // Multiply and accumulate
+      #pragma unroll
+      for (int ic_0 = 0; ic_0 < 4; ic_0++){
+        uint32_t cur_packed_weight =  qw[ic_0];
+        float cur_inp = __half2float(inp[ic_0]);
+        float cur_scale = __half2float(cscale[ic_0]);
+        float cur_zero = __half2float(czero[ic_0]);
+        for (int ic_1 = 0; ic_1 < pack_factor; ic_1++){
+          int oc_idx = oc_start_idx + ic_1;
+          if (oc_idx < OC){
+            float cur_single_weight_fp = (float)(cur_packed_weight & num);
+            float dequantized_weight = cur_scale * cur_single_weight_fp + cur_zero;
+            cur_packed_weight = cur_packed_weight >> bit; // Shift to next bit
+            psum[ic_1] += dequantized_weight * cur_inp;
+          }
+        }
+      }
+    }
+    for (int i=0; i < pack_factor; i++){
+      int oc_idx = oc_start_idx + i;
+      if (oc_idx < OC){
+        psum[i] = warp_reduce_sum(psum[i]);
+        if (threadIdx.x == 0) 
+          outputs[oc_idx] = __float2half(psum[i]); 
+      }
+    }
+}
+
+
 // __global__ void bgemv2_kernel_g64_outer_dim(
 //   const half* _inputs, const uint32_t* _weight, const half* _zeros, const half* _scale, half* _outputs, 
 //   const int IC, const int OC){
@@ -551,8 +622,9 @@ torch::Tensor gemv_forward_cuda_outer_dim(
         in_feats, kernel, zeros, scaling_factors, out_feats,
         // constants
         num_in_channels, num_out_channels, group_size, nh, mqa
-      );}
-    else{
+      );
+    }
+    else if (bit == 2){
       // note: in this case, pack factor == 16
       bgemv2_kernel_outer_dim<<<num_blocks, num_threads>>>(
         // pointers
@@ -560,6 +632,15 @@ torch::Tensor gemv_forward_cuda_outer_dim(
         // constants
         num_in_channels, num_out_channels, group_size, nh, mqa
       );     
-      }
+    }
+    else if (bit == 1){
+      // note: in this case, pack factor == 16
+      bgemv1_kernel_outer_dim<<<num_blocks, num_threads>>>(
+        // pointers
+        in_feats, kernel, zeros, scaling_factors, out_feats,
+        // constants
+        num_in_channels, num_out_channels, group_size, nh, mqa
+      );
+    }
     return _out_feats;
 ;}

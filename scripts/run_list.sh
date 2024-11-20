@@ -14,6 +14,10 @@ anno_list=(2_30_32_16_32_3 2_32_32_12_32_3 2_30_32_14_32_3)
 anno_list=(2_30_32_16_32_10 2_30_32_16_32_11 2_30_32_16_32_12 2_30_32_16_32_13 2_30_32_16_32_14 2_30_32_16_32_15 )
 # anno_list=(2_30_32_16_32_10 2_30_32_16_32_11 2_30_32_16_32_12 2_30_32_16_32_13 2_30_32_16_32_14 2_30_32_16_32_15 2_32_32_14_32_10 2_32_32_14_32_11 2_32_32_14_32_12 2_32_32_14_32_13 2_32_32_14_32_14 2_32_32_14_32_15 )
 anno_list=(2_30_32_12_32_10 )
+anno_list=(2_0_0_0_0_0 )
+anno_list=(${bit}_0_0_0_0_0 )
+anno_list=(${bit}_30_32_16_32 )
+
 
 
 echo "numbers of array = ${#anno_list[*]}"
@@ -21,7 +25,7 @@ echo "numbers of array = ${#anno_list[*]}"
 for anno in ${anno_list[@]}
 do
     echo $anno
-    CUDA_VISIBLE_DEVICES=$gpuid python v_pred_long_bench.py --model_name_or_path $model \
+    CUDA_LAUNCH_BLOCKING=1 CUDA_VISIBLE_DEVICES=$gpuid python v_pred_long_bench.py --model_name_or_path $model \
         --cache_dir ./cached_models \
         --k_bits $bit \
         --v_bits $bit \

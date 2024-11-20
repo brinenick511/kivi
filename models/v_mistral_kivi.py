@@ -30,7 +30,7 @@ from torch import nn
 from torch.nn import BCEWithLogitsLoss, CrossEntropyLoss, MSELoss
 
 from quant.new_pack import triton_quantize_and_pack_along_last_dim, debugging, unpack_tensor,pack_tensor
-from quant.matmul import cuda_bmm_fA_qB_outer
+from quant.matmul import cuda_bmm_fA_qB_outer, triton_bmm_fA_qB_outer
 
 from transformers.models.mistral.configuration_mistral import *
 from transformers.models.mistral.modeling_mistral import *
@@ -74,6 +74,7 @@ def debug_print(a):
                 s = _test(b[i],n+1,s,str(i))
         return s
     print(_test(a,0,'',''))
+import dei_utils
 # DEBUG: START HERE
 
 if is_flash_attn_2_available():
@@ -110,9 +111,10 @@ class MistralAttention_KIVI(nn.Module):
     and "Generating Long Sequences with Sparse Transformers".
     """
 
-    def __init__(self, config: MistralConfig):
+    def __init__(self, config: MistralConfig, layer_idx: int):
         super().__init__()
         self.config = config
+        self.layer_idx = layer_idx
         self.hidden_size = config.hidden_size
         self.num_heads = config.num_attention_heads
         self.head_dim = self.hidden_size // self.num_heads
@@ -121,8 +123,10 @@ class MistralAttention_KIVI(nn.Module):
         self.max_position_embeddings = config.max_position_embeddings
         self.rope_theta = config.rope_theta
         self.is_causal = True
-        self.k_bits = config.k_bits
-        self.v_bits = config.v_bits
+        l_k = 30
+        l_v = 16
+        self.k_bits = config.k_bits if layer_idx>=l_k else 2
+        self.v_bits = config.v_bits if layer_idx>=l_v else 2
         self.group_size = config.group_size
         self.residual_length = config.residual_length
 
@@ -420,7 +424,15 @@ class MistralFlashAttention_KIVI(MistralAttention_KIVI):
                 key_states_quant_trans_repeat = repeat_kv_quant(key_states_quant_trans, self.num_key_value_groups)
                 key_scale_trans_repeat = repeat_kv_quant(key_scale_trans, self.num_key_value_groups)
                 key_mn_trans_repeat = repeat_kv_quant(key_mn_trans, self.num_key_value_groups)
-                att_qkquant = cuda_bmm_fA_qB_outer(self.group_size, query_states, key_states_quant_trans_repeat, 
+                # print(f'self.k_bits: {self.k_bits}')
+                # print(f'query_states: {query_states.shape}')
+                # print(f'key_states_quant_trans_repeat: {key_states_quant_trans_repeat.shape}')
+                # print(f'key_scale_trans_repeat: {key_scale_trans_repeat.shape}')
+                # print(f'key_mn_trans_repeat: {key_mn_trans_repeat.shape}')
+                # print(f'self.group_size: {self.group_size}')
+                # att_qkquant = cuda_bmm_fA_qB_outer(self.group_size, query_states, key_states_quant_trans_repeat, 
+                #                 key_scale_trans_repeat, key_mn_trans_repeat, self.k_bits) # key_states_quant_trans, key_scale_trans, key_mn_trans need to be repeated
+                att_qkquant = triton_bmm_fA_qB_outer(self.group_size, query_states, key_states_quant_trans_repeat, 
                                 key_scale_trans_repeat, key_mn_trans_repeat, self.k_bits) # key_states_quant_trans, key_scale_trans, key_mn_trans need to be repeated
             else:
                 att_qkquant = None
@@ -480,7 +492,9 @@ class MistralFlashAttention_KIVI(MistralAttention_KIVI):
                 value_states_quant_repeat = repeat_kv_quant(value_states_quant, self.num_key_value_groups)
                 value_scale_repeat = repeat_kv_quant(value_scale, self.num_key_value_groups)
                 value_mn_repeat = repeat_kv_quant(value_mn, self.num_key_value_groups)
-                attn_output = cuda_bmm_fA_qB_outer(self.group_size, attn_weights[:, :, :, :-value_full_length], value_states_quant_repeat, 
+                # attn_output = cuda_bmm_fA_qB_outer(self.group_size, attn_weights[:, :, :, :-value_full_length], value_states_quant_repeat, 
+                #                                 value_scale_repeat, value_mn_repeat, self.v_bits) # value_states_quant, value_scale, value_mn need to be repeated
+                attn_output = triton_bmm_fA_qB_outer(self.group_size, attn_weights[:, :, :, :-value_full_length], value_states_quant_repeat, 
                                                 value_scale_repeat, value_mn_repeat, self.v_bits) # value_states_quant, value_scale, value_mn need to be repeated
                 
                 value_states_full_repeat = repeat_kv(value_states_full, self.num_key_value_groups)
@@ -506,7 +520,6 @@ class MistralFlashAttention_KIVI(MistralAttention_KIVI):
 
         else:
             # INFO: prefill
-            # print(f"kivi with flash! {self.k_bits}")
 
             key_states_repeat = repeat_kv(key_states, self.num_key_value_groups)
             value_states_repeat = repeat_kv(value_states, self.num_key_value_groups)
@@ -544,6 +557,7 @@ class MistralFlashAttention_KIVI(MistralAttention_KIVI):
                 key_states_quant = key_states
                 key_states_full = None
             if key_states_quant is not None:
+                # dei_utils.dei_save('triton_k',key_states_quant.transpose(2, 3).contiguous())
                 key_states_quant_trans, key_scale_trans, key_mn_trans = triton_quantize_and_pack_along_last_dim(
                     key_states_quant.transpose(2, 3).contiguous(), self.group_size, self.k_bits)
             else:
@@ -559,6 +573,7 @@ class MistralFlashAttention_KIVI(MistralAttention_KIVI):
             else:
                 value_states_quant = value_states[:, :, :-self.residual_length, :].contiguous()
                 value_states_full = value_states[:, :, -self.residual_length:, :].contiguous()
+                # dei_utils.dei_save('triton_v',value_states_quant)
                 value_states_quant, value_scale, value_mn = triton_quantize_and_pack_along_last_dim(
                     value_states_quant, self.group_size, self.v_bits)
         past_key_value = (
@@ -715,9 +730,9 @@ class MistralDecoderLayer_KIVI(nn.Module):
         super().__init__()
         self.hidden_size = config.hidden_size
         self.self_attn = (
-            MistralAttention_KIVI(config=config)
+            MistralAttention_KIVI(config, layer_idx)
             if not getattr(config, "use_flash", False)
-            else MistralFlashAttention_KIVI(config)
+            else MistralFlashAttention_KIVI(config, layer_idx)
         )
         self.mlp = MistralMLP(config)
         self.input_layernorm = MistralRMSNorm(config.hidden_size, eps=config.rms_norm_eps)
@@ -833,7 +848,7 @@ class MistralModel_KIVI(MistralPreTrainedModel):
         self.v = [id_l,id_u]
         self.mode = str(l[-1]) if len(l)>=6 else -1
         assert self.k_bits==int(l[0])
-    def moding(self, num=None):
+    def moding(self, num:int = -1):
         if num is None:
             return int(self.mode)
         return bool(int(self.mode) == num)
@@ -884,10 +899,12 @@ class MistralModel_KIVI(MistralPreTrainedModel):
         # if self.cnt==1:
         #     print('\n\ndebugging\n\ndebugging\n\nover\n\n')
         #     exit(0)
+        torch.cuda.empty_cache()
         # print(self.idx, self.cnt)
-        if past_key_values is not None and self.cnt==1 and (self.k[0]!=self.k[1] or self.v[0]!=self.v[1]):
+        
+        # INFO: MERGE!
+        if past_key_values is not None and self.cnt==1 and (self.k[0]!=self.k[1] or self.v[0]!=self.v[1]) and self.moding(-1)==False:
             g_l = 10*[-1,]+[.9,.8,.6,.4,.2,.1]
-            gamma = g_l[self.moding()]
             # print('gamma:', gamma)
             if self.k[0]==self.k[1]:
                 all_id_l=min(self.v)
@@ -921,7 +938,10 @@ class MistralModel_KIVI(MistralPreTrainedModel):
                         k_l = (0.55*k_l+0.45*k_u).round().to(torch.int32)
                     elif self.mode==5 or self.mode=='5':
                         k_l = (0.45*k_l+0.55*k_u).round().to(torch.int32)
+                    elif self.moding(20):
+                        print('do nothing')
                     else:
+                        gamma = g_l[self.moding()]
                         k_l = (gamma*k_l + (1-gamma)*k_u).round().to(torch.int32)
                     # k_l = ((k_l+k_u)/2).round().to(torch.int32)
                     # if bk is None:
@@ -942,7 +962,10 @@ class MistralModel_KIVI(MistralPreTrainedModel):
                         v_l = (0.55*v_l+0.45*v_u).round().to(torch.int32)
                     elif self.mode==5 or self.mode=='5':
                         v_l = (0.45*v_l+0.55*v_u).round().to(torch.int32)
+                    elif self.moding(20):
+                        print('do nothing')
                     else:
+                        gamma = g_l[self.moding()]
                         v_l = (gamma*v_l + (1-gamma)*v_u).round().to(torch.int32)
                     # v_l = ((v_l+v_u)/2).round().to(torch.int32)
                     # if bv is None:
