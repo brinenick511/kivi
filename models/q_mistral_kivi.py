@@ -834,6 +834,14 @@ class MistralModel_KIVI(MistralPreTrainedModel):
         l = config.annotation.split('_')
         self.k = [int(l[2]),32]
         self.v = [int(l[3]),32]
+        self.mode = l[-1]
+        self.kq = [int(l[0]),32]
+        self.vq = [int(l[1]),32]
+    
+    def moding(self, n:int = None):
+        if n is None:
+            return int(self.mode)
+        return bool(int(self.mode)==n)
         
     def get_input_embeddings(self):
         return self.embed_tokens
@@ -916,8 +924,27 @@ class MistralModel_KIVI(MistralPreTrainedModel):
                 elif flag_v:
                     tm+=((past_key_values[id_l][:4]+(v_l,)+past_key_values[id_l][5:]),)
                     tm+=((past_key_values[id_u][:4]+(v_u,)+past_key_values[id_u][5:]),)
-                
             past_key_values = tl+tm+tu
+        
+        # INFO: CALI!
+        if past_key_values is not None and self.cnt==1:
+            tm = ()
+            for i in range(32):
+                flag_k = bool(i>=self.kq[0])
+                flag_v = bool(i>=self.vq[0])
+                # print(i,flag_k,flag_v)
+                p_l = past_key_values[i]
+                if flag_k and flag_v:
+                    p_l = p_l[:2]+((p_l[2]-1/3*p_l[2]),(p_l[3]+1/6*p_l[2]),)+p_l[4:6]+((p_l[6]-1/3*p_l[6]),(p_l[7]+1/6*p_l[6]),)+p_l[8:]
+                elif flag_k:
+                    p_l = p_l[:2]+((p_l[2]-1/3*p_l[2]),(p_l[3]+1/6*p_l[2]),)+p_l[4:]
+                elif flag_v:
+                    p_l = p_l[:6]+((p_l[6]-1/3*p_l[6]),(p_l[7]+1/6*p_l[6]),)+p_l[8:]
+                # else:
+                #     p_l = p_l
+                tm = tm+(p_l,)
+            past_key_values = tm
+        
         seq_length_with_past = seq_length
         past_key_values_length = 0
 

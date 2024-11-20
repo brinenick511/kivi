@@ -58,7 +58,7 @@ if __name__ == "__main__":
     
     if os.path.exists(path):
         with open(path, 'r', encoding='utf-8') as file:
-            s=f'q = \t( {l[0]}, {l[1]} )\nm = \t( {l[2]}, {l[3]} )\n\n{output_path}\n'
+            s=f'q = ( {l[0]}, {l[1]} )\nm = ( {l[2]}, {l[3]} )\n\n{output_path}\n'
             file_content = file.read()
             data = json.loads(file_content)
             ol = []
@@ -78,7 +78,12 @@ if __name__ == "__main__":
                 new_data+=[vl[i],]
             avg=int(100*avg/len(ol))/100
             s=f'{s}\n"average": {avg}'
-            file_name = '/new_data/yanghq/ans.csv'
+            if 'm' in model_args.annotation:
+                file_name = '/new_data/yanghq/ans_m.csv'
+            elif 'q' in model_args.annotation:
+                file_name = '/new_data/yanghq/ans_q.csv'
+            else:
+                file_name = '/new_data/yanghq/ans.csv'
             lock_file = file_name + '.lock'  # 锁文件名
             lock = FileLock(lock_file)
             with lock:

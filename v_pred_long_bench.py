@@ -179,7 +179,7 @@ if __name__ == '__main__':
             # for key in d_map.keys():
             #     if '16' in key or '15' in key or '14' in key:
             #         d_map[key] = 1
-            from models.v_mistral_kivi import MistralForCausalLM_KIVI
+            # from models.v_mistral_kivi import MistralForCausalLM_KIVI
             from models.q_mistral_kivi import MistralForCausalLM_KIVI
             # from models.mistral_kivi import MistralForCausalLM_KIVI
             config.k_bits = model_args.k_bits
@@ -228,7 +228,7 @@ if __name__ == '__main__':
         datasets = ["lcc", "repobench-p", "trec", "2wikimqa", "gov_report"]
         datasets = ['multifieldqa_zh','trec','passage_retrieval_zh','multi_news',]
         datasets = ['multifieldqa_zh','trec','multi_news',]
-        datasets = ['multifieldqa_zh','trec',]
+        # datasets = ['multifieldqa_zh','trec',]
         # datasets = ['multi_news',]
         if model_args.k_bits >= 16:
             datasets = ['passage_retrieval_zh','multi_news',]
