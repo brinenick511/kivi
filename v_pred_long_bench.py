@@ -230,8 +230,13 @@ if __name__ == '__main__':
         datasets = ['multifieldqa_zh','trec','multi_news',]
         # datasets = ['multifieldqa_zh','trec',]
         # datasets = ['multi_news',]
-        if model_args.k_bits >= 16:
-            datasets = ['passage_retrieval_zh','multi_news',]
+        # if model_args.k_bits >= 16:
+        #     datasets = ['passage_retrieval_zh','multi_news',]
+        if 'm' in str(model_args.annotation):
+            datasets = ['multi_news',]
+        elif 'q' in str(model_args.annotation):
+            datasets = ['multifieldqa_zh','trec','multi_news',]
+        
     # we design specific prompt format and max generation length for each task, feel free to modify them to optimize model output
     dataset2prompt = json.load(open("config/dataset2prompt.json", "r"))
     dataset2maxlen = json.load(open("config/dataset2maxlen.json", "r"))

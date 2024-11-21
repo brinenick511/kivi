@@ -927,7 +927,7 @@ class MistralModel_KIVI(MistralPreTrainedModel):
             past_key_values = tl+tm+tu
         
         # INFO: CALI!
-        if past_key_values is not None and self.cnt==1:
+        if past_key_values is not None and self.cnt==1 and self.moding(1):
             tm = ()
             for i in range(32):
                 flag_k = bool(i>=self.kq[0])
