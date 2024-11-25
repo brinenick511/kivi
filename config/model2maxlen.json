@@ -16,5 +16,5 @@
     "falcon-7b": 4096,
     "Mistral-7B-v0.1": 8192,
     "longchat-7b-v1.5-32k": 31500,
-    "Mistral-7B-Instruct-v0.2": 15000
+    "Mistral-7B-Instruct-v0.2": 30000
 }

@@ -4,6 +4,8 @@ bit=${3:-"2"}
 
 model=/new_data/yanghq/models/mistralai/Mistral-7B-Instruct-v0.2
 # anno_list=(2_30_32_16_32_10 2_30_32_16_32_11 2_30_32_16_32_12 2_30_32_16_32_13 2_30_32_16_32_14 2_30_32_16_32_15 2_32_32_14_32_10 2_32_32_14_32_11 2_32_32_14_32_12 2_32_32_14_32_13 2_32_32_14_32_14 2_32_32_14_32_15 )
+
+
 IFS=',' read -r -a anno_array <<< "$anno_list"
 
 cleanup() {
@@ -23,6 +25,8 @@ sleep 1
 for anno in ${anno_array[@]}
 do
     echo "running ${anno} in ${gpuid}"
+
+
     CUDA_VISIBLE_DEVICES=$gpuid python v_pred_long_bench.py --model_name_or_path $model \
         --cache_dir ./cached_models \
         --k_bits $bit \
@@ -52,6 +56,7 @@ do
         --group_size 32 \
         --residual_length 128 \
         --annotation $anno
+
 
 done
 

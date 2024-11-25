@@ -123,16 +123,14 @@ class MistralAttention_KIVI(nn.Module):
         self.max_position_embeddings = config.max_position_embeddings
         self.rope_theta = config.rope_theta
         self.is_causal = True
-        # l_k = 30
-        # l_v = 16
-        # self.k_bits = config.k_bits if layer_idx>=l_k else 2
-        # self.v_bits = config.v_bits if layer_idx>=l_v else 2
         
         l=config.annotation.split('_')
         k_q = [int(l[0]),32]
         v_q = [int(l[1]),32]
         self.k_bits = 1 if ( layer_idx>=k_q[0] and layer_idx<k_q[1] ) else 2
         self.v_bits = 1 if ( layer_idx>=v_q[0] and layer_idx<v_q[1] ) else 2
+        self.gamma = int(l[-1].strip()) * (1/56)
+        # self.gamma = int(l[-1].strip()) * (1/12)
         
         self.group_size = config.group_size
         self.residual_length = config.residual_length
@@ -455,6 +453,13 @@ class MistralFlashAttention_KIVI(MistralAttention_KIVI):
                 key_states_quant_trans_new, key_scale_trans_new, key_mn_trans_new = triton_quantize_and_pack_along_last_dim(key_states_full.transpose(2, 3).contiguous(), 
                                                                                                                             self.group_size, 
                                                                                                                             self.k_bits)
+                # TODO: Cali_K New
+                # if self.k_bits==1:
+                    # key_mn_trans_new += (key_scale_trans_new*self.gamma)
+                    # key_scale_trans_new *= (1 - 2*self.gamma)
+                key_mn_trans_new += (key_scale_trans_new*self.gamma)
+                key_scale_trans_new *= (1 - 2*self.gamma)
+                
                 key_states_full = None
                 if key_states_quant_trans is not None:
                     key_states_quant_trans = torch.cat([key_states_quant_trans, key_states_quant_trans_new], dim=3)
@@ -508,6 +513,13 @@ class MistralFlashAttention_KIVI(MistralAttention_KIVI):
                 value_states_quant_new, scale, mn = triton_quantize_and_pack_along_last_dim(value_states_full[:, :, :1, :].contiguous(), 
                                                                                                 self.group_size, 
                                                                                                 self.v_bits)
+                # TODO: Cali_V New
+                # if self.v_bits==1:
+                #     mn += (scale*self.gamma)
+                #     scale *= (1 - 2*self.gamma)
+                mn += (scale*self.gamma)
+                scale *= (1 - 2*self.gamma)
+                
                 value_states_full = value_states_full[:, :, 1:, :].contiguous()
                 if value_states_quant is not None:
                     value_states_quant = torch.cat([value_states_quant, value_states_quant_new], dim=2)
@@ -561,6 +573,12 @@ class MistralFlashAttention_KIVI(MistralAttention_KIVI):
                 # dei_utils.dei_save('triton_k',key_states_quant.transpose(2, 3).contiguous())
                 key_states_quant_trans, key_scale_trans, key_mn_trans = triton_quantize_and_pack_along_last_dim(
                     key_states_quant.transpose(2, 3).contiguous(), self.group_size, self.k_bits)
+                # TODO: Cali_K
+                # if self.k_bits==1:
+                #     key_mn_trans += (key_scale_trans*self.gamma)
+                #     key_scale_trans *= (1 - 2*self.gamma)
+                key_mn_trans += (key_scale_trans*self.gamma)
+                key_scale_trans *= (1 - 2*self.gamma)
             else:
                 key_states_quant_trans = None
                 key_scale_trans = None
@@ -577,6 +595,12 @@ class MistralFlashAttention_KIVI(MistralAttention_KIVI):
                 # dei_utils.dei_save('triton_v',value_states_quant)
                 value_states_quant, value_scale, value_mn = triton_quantize_and_pack_along_last_dim(
                     value_states_quant, self.group_size, self.v_bits)
+                # TODO: Cali_V
+                # if self.v_bits==1:
+                #     value_mn += (value_scale*self.gamma)
+                #     value_scale *= (1 - 2*self.gamma)
+                value_mn += (value_scale*self.gamma)
+                value_scale *= (1 - 2*self.gamma)
         past_key_value = (
             key_states_quant_trans, key_states_full, key_scale_trans, key_mn_trans,
             value_states_quant, value_states_full, value_scale, value_mn, kv_seq_len
@@ -927,23 +951,31 @@ class MistralModel_KIVI(MistralPreTrainedModel):
             past_key_values = tl+tm+tu
         
         # INFO: CALI!
-        if past_key_values is not None and self.cnt==1 and self.moding(1):
-            tm = ()
-            for i in range(32):
-                flag_k = bool(i>=self.kq[0])
-                flag_v = bool(i>=self.vq[0])
-                # print(i,flag_k,flag_v)
-                p_l = past_key_values[i]
-                if flag_k and flag_v:
-                    p_l = p_l[:2]+((p_l[2]-1/3*p_l[2]),(p_l[3]+1/6*p_l[2]),)+p_l[4:6]+((p_l[6]-1/3*p_l[6]),(p_l[7]+1/6*p_l[6]),)+p_l[8:]
-                elif flag_k:
-                    p_l = p_l[:2]+((p_l[2]-1/3*p_l[2]),(p_l[3]+1/6*p_l[2]),)+p_l[4:]
-                elif flag_v:
-                    p_l = p_l[:6]+((p_l[6]-1/3*p_l[6]),(p_l[7]+1/6*p_l[6]),)+p_l[8:]
-                # else:
-                #     p_l = p_l
-                tm = tm+(p_l,)
-            past_key_values = tm
+        # if past_key_values is not None and self.cnt==1 and self.moding(1):
+        #     tm = ()
+        #     for i in range(32):
+        #         flag_k = bool(i>=self.kq[0])
+        #         flag_v = bool(i>=self.vq[0])
+        #         # print(i,flag_k,flag_v)
+        #         p_l = past_key_values[i]
+        #         if flag_k and flag_v:
+        #             p_l = p_l[:2]+((p_l[2]-1/3*p_l[2]),(p_l[3]+1/6*p_l[2]),)+p_l[4:6]+((p_l[6]-1/3*p_l[6]),(p_l[7]+1/6*p_l[6]),)+p_l[8:]
+        #         elif flag_k:
+        #             p_l = p_l[:2]+((p_l[2]-1/3*p_l[2]),(p_l[3]+1/6*p_l[2]),)+p_l[4:]
+        #         elif flag_v:
+        #             p_l = p_l[:6]+((p_l[6]-1/3*p_l[6]),(p_l[7]+1/6*p_l[6]),)+p_l[8:]
+        #         # else:
+        #         #     p_l = p_l
+        #         tm = tm+(p_l,)
+        #     past_key_values = tm
+            
+        # # INFO: REAL CALI:
+        # if past_key_values is not None and self.cnt==1:
+        #     for i in [0,31]:
+        #         print(f'\n### layer: {i}\n')
+        #         l = past_key_values[i]
+        #         dei_utils.dei_print(l)
+        #     exit(0)
         
         seq_length_with_past = seq_length
         past_key_values_length = 0
