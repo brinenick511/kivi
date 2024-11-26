@@ -59,7 +59,7 @@ if __name__ == "__main__":
     if os.path.exists(path):
         with open(path, 'r', encoding='utf-8') as file:
             # s=f'q = ( {l[0]}, {l[1]} )\nm = ( {l[2]}, {l[3]} )\n\n{output_path}\n'
-            s=f'gamma = {l[-1]}\n\nkivi-2\n{output_path}\n'
+            s=f'gamma = {l[-1]}\n\nasym-kv\n{output_path}\n'
             file_content = file.read()
             # data = json.loads(file_content)
             # ol = []
@@ -101,6 +101,19 @@ if __name__ == "__main__":
         send_qq_email(f'{output_path}: Success',f'{s}\n\n\n{file_content}')
         print(f'{output_path}: Success')
     else:
-        send_qq_email(f'{output_path}: Fail',f'{output_path}: Fail')
+        directory = f'pred/{output_path}/'
+        s=f'{output_path}: Fail'
+        for root, dirs, files in os.walk(directory):
+            for file in files:
+                if file.endswith(".json"):
+                    file_path = os.path.join(root, file)
+                    try:
+                        with open(file_path, 'r', encoding='utf-8') as f:
+                            lines = f.readlines()
+                            s+=(f"\nfile: {file}")
+                            s+=(f"\nlines: {len(lines)}\n")
+                    except Exception as e:
+                        s+=(f"\nfail to read {file} : {e}")
+        send_qq_email(f'{output_path}: Fail',s)
         print(f'{output_path}: Fail')
     

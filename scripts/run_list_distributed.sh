@@ -21,7 +21,6 @@ echo "num_task = ${#anno_array[*]} in gpu#${gpuid}"
 sleep 1
 
 
-# for anno in ${anno_list[@]}
 for anno in ${anno_array[@]}
 do
     echo "running ${anno} in ${gpuid}"
