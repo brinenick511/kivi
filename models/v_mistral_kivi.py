@@ -123,10 +123,15 @@ class MistralAttention_KIVI(nn.Module):
         self.max_position_embeddings = config.max_position_embeddings
         self.rope_theta = config.rope_theta
         self.is_causal = True
-        l_k = 30
-        l_v = 16
-        self.k_bits = config.k_bits if layer_idx>=l_k else 2
-        self.v_bits = config.v_bits if layer_idx>=l_v else 2
+        
+        l=config.annotation.split('_')
+        k_q = [int(l[0]),32]
+        v_q = [int(l[1]),32]
+        self.k_bits = 1 if ( layer_idx>=k_q[0] and layer_idx<k_q[1] ) else 2
+        self.v_bits = 1 if ( layer_idx>=v_q[0] and layer_idx<v_q[1] ) else 2
+        self.gamma = int(l[-1].strip()) * (1/56)
+        # self.gamma = int(l[-1].strip()) * (1/12)
+        
         self.group_size = config.group_size
         self.residual_length = config.residual_length
 
@@ -424,12 +429,6 @@ class MistralFlashAttention_KIVI(MistralAttention_KIVI):
                 key_states_quant_trans_repeat = repeat_kv_quant(key_states_quant_trans, self.num_key_value_groups)
                 key_scale_trans_repeat = repeat_kv_quant(key_scale_trans, self.num_key_value_groups)
                 key_mn_trans_repeat = repeat_kv_quant(key_mn_trans, self.num_key_value_groups)
-                # print(f'self.k_bits: {self.k_bits}')
-                # print(f'query_states: {query_states.shape}')
-                # print(f'key_states_quant_trans_repeat: {key_states_quant_trans_repeat.shape}')
-                # print(f'key_scale_trans_repeat: {key_scale_trans_repeat.shape}')
-                # print(f'key_mn_trans_repeat: {key_mn_trans_repeat.shape}')
-                # print(f'self.group_size: {self.group_size}')
                 # att_qkquant = cuda_bmm_fA_qB_outer(self.group_size, query_states, key_states_quant_trans_repeat, 
                 #                 key_scale_trans_repeat, key_mn_trans_repeat, self.k_bits) # key_states_quant_trans, key_scale_trans, key_mn_trans need to be repeated
                 att_qkquant = triton_bmm_fA_qB_outer(self.group_size, query_states, key_states_quant_trans_repeat, 
@@ -454,6 +453,13 @@ class MistralFlashAttention_KIVI(MistralAttention_KIVI):
                 key_states_quant_trans_new, key_scale_trans_new, key_mn_trans_new = triton_quantize_and_pack_along_last_dim(key_states_full.transpose(2, 3).contiguous(), 
                                                                                                                             self.group_size, 
                                                                                                                             self.k_bits)
+                # TODO: Cali_K New
+                # if self.k_bits==1:
+                #     key_mn_trans_new += (key_scale_trans_new*self.gamma)
+                #     key_scale_trans_new *= (1 - 2*self.gamma)
+                # key_mn_trans_new += (key_scale_trans_new*self.gamma)
+                # key_scale_trans_new *= (1 - 2*self.gamma)
+                
                 key_states_full = None
                 if key_states_quant_trans is not None:
                     key_states_quant_trans = torch.cat([key_states_quant_trans, key_states_quant_trans_new], dim=3)
@@ -507,6 +513,13 @@ class MistralFlashAttention_KIVI(MistralAttention_KIVI):
                 value_states_quant_new, scale, mn = triton_quantize_and_pack_along_last_dim(value_states_full[:, :, :1, :].contiguous(), 
                                                                                                 self.group_size, 
                                                                                                 self.v_bits)
+                # TODO: Cali_V New
+                # if self.v_bits==1:
+                #     mn += (scale*self.gamma)
+                #     scale *= (1 - 2*self.gamma)
+                # mn += (scale*self.gamma)
+                # scale *= (1 - 2*self.gamma)
+                
                 value_states_full = value_states_full[:, :, 1:, :].contiguous()
                 if value_states_quant is not None:
                     value_states_quant = torch.cat([value_states_quant, value_states_quant_new], dim=2)
@@ -560,6 +573,13 @@ class MistralFlashAttention_KIVI(MistralAttention_KIVI):
                 # dei_utils.dei_save('triton_k',key_states_quant.transpose(2, 3).contiguous())
                 key_states_quant_trans, key_scale_trans, key_mn_trans = triton_quantize_and_pack_along_last_dim(
                     key_states_quant.transpose(2, 3).contiguous(), self.group_size, self.k_bits)
+                # TODO: Cali_K
+                # if self.k_bits==1:
+                #     key_mn_trans += (key_scale_trans*self.gamma)
+                #     key_scale_trans *= (1 - 2*self.gamma)
+                # key_mn_trans += (key_scale_trans*self.gamma)
+                # key_scale_trans *= (1 - 2*self.gamma)
+                
             else:
                 key_states_quant_trans = None
                 key_scale_trans = None
@@ -576,6 +596,13 @@ class MistralFlashAttention_KIVI(MistralAttention_KIVI):
                 # dei_utils.dei_save('triton_v',value_states_quant)
                 value_states_quant, value_scale, value_mn = triton_quantize_and_pack_along_last_dim(
                     value_states_quant, self.group_size, self.v_bits)
+                # TODO: Cali_V
+                # if self.v_bits==1:
+                #     value_mn += (value_scale*self.gamma)
+                #     value_scale *= (1 - 2*self.gamma)
+                # value_mn += (value_scale*self.gamma)
+                # value_scale *= (1 - 2*self.gamma)
+                
         past_key_value = (
             key_states_quant_trans, key_states_full, key_scale_trans, key_mn_trans,
             value_states_quant, value_states_full, value_scale, value_mn, kv_seq_len
@@ -829,29 +856,18 @@ class MistralModel_KIVI(MistralPreTrainedModel):
         # INFO: count
         self.cnt=-1
         self.idx=-1
-        # self.test=[]
-        # self.test=[18, 6, 8, 10, 14, 10, 5, 14, 14, 4, 31, 31, 31, 17, 2, 31, 31, 31, 31, 3, 8]
         # ADDED: debugging
-        s=config.annotation
-        l = s.split('_')
-        # assert len(l)>=5, 'len(l)>=4'
-        # kv = l[1]
-        # assert kv in ['0','k','v','kv'], f"{kv} in ['0','k','v','kv']"
-        # self.kv = ['k' in kv, 'v' in kv]
-        id_l = int(l[1])
-        id_u = int(l[2])
-        assert (id_u-id_l)%2==0 and id_u>=id_l and id_u <= 32 and id_l >= 0, f"{id_l}, {id_u}"
-        self.k = [id_l,id_u]
-        id_l = int(l[3])
-        id_u = int(l[4])
-        assert (id_u-id_l)%2==0 and id_u>=id_l and id_u <= 32 and id_l >= 0, f"{id_l}, {id_u}"
-        self.v = [id_l,id_u]
-        self.mode = str(l[-1]) if len(l)>=6 else -1
-        assert self.k_bits==int(l[0])
-    def moding(self, num:int = -1):
-        if num is None:
+        l = config.annotation.split('_')
+        self.k = [int(l[2]),32]
+        self.v = [int(l[3]),32]
+        self.mode = l[-1]
+        self.kq = [int(l[0]),32]
+        self.vq = [int(l[1]),32]
+    
+    def moding(self, n:int = None):
+        if n is None:
             return int(self.mode)
-        return bool(int(self.mode) == num)
+        return bool(int(self.mode)==n)
         
     def get_input_embeddings(self):
         return self.embed_tokens
@@ -896,147 +912,63 @@ class MistralModel_KIVI(MistralPreTrainedModel):
             self.idx+=1
         else: # decode
             self.cnt+=1
-        # if self.cnt==1:
-        #     print('\n\ndebugging\n\ndebugging\n\nover\n\n')
+        # if self.idx==5:
         #     exit(0)
         torch.cuda.empty_cache()
         # print(self.idx, self.cnt)
         
-        # INFO: CALI!
-        if past_key_values is not None and self.cnt==1:
-            k_id = 30
-            v_id = 16
+        # INFO: MERGE!
+        if past_key_values is not None and self.cnt==1 and (self.k[0]!=self.k[1] or self.v[0]!=self.v[1]):
+            # assert (self.v[1]-self.v[0])%self.moding()==0
+            assert (self.k[1]-self.k[0]) in [0,]
+            assert (self.v[1]-self.v[0]) in [24,18,16,], f'\nself.v[1] = {self.v[1]}\nself.v[0]={self.v[0]}'
+            if (self.v[1]-self.v[0]) == 24:
+                group_size = 2
+            elif (self.v[1]-self.v[0]) == 18:
+                group_size = 3
+            elif (self.v[1]-self.v[0]) == 16:
+                group_size = 4
+            assert (self.moding()) in list(range(group_size)), f'\nself.moding()={self.moding()}\nlist(range(group_size))={list(range(group_size))}'
+            loop = (self.v[1]-self.v[0]) // group_size
+            
+            tl = past_key_values[:self.v[0]]
             tm = ()
-            for i in range(32):
-                flag_k = bool(i>=k_id)
-                flag_v = bool(i>=v_id)
-                # print(i,flag_k,flag_v)
-                p_l = past_key_values[i]
-                if flag_k and flag_v:
-                    p_l = p_l[:2]+((p_l[2]-1/3*p_l[2]),(p_l[3]+1/6*p_l[2]),)+p_l[4:6]+((p_l[6]-1/3*p_l[6]),(p_l[7]+1/6*p_l[6]),)+p_l[8:]
-                elif flag_k:
-                    p_l = p_l[:2]+((p_l[2]-1/3*p_l[2]),(p_l[3]+1/6*p_l[2]),)+p_l[4:]
-                elif flag_v:
-                    p_l = p_l[:6]+((p_l[6]-1/3*p_l[6]),(p_l[7]+1/6*p_l[6]),)+p_l[8:]
-                # else:
-                #     p_l = p_l
-                tm = tm+(p_l,)
-            past_key_values = tm
+            
+            for i in range(loop):
+                v_sharer_idx = self.v[0]+i*group_size+self.moding()
+                v_sharer = past_key_values[v_sharer_idx][4]
+                for j in range(group_size):
+                    v_idx = self.v[0]+i*group_size+j
+                    tm+=((past_key_values[v_idx][:4]+(v_sharer,)+past_key_values[v_idx][5:]),)
+            past_key_values = tl+tm
+            
         
-        # # INFO: MERGE!
-        # if past_key_values is not None and self.cnt==1 and (self.k[0]!=self.k[1] or self.v[0]!=self.v[1]) and self.moding(-1)==False:
-        #     g_l = 10*[-1,]+[.9,.8,.6,.4,.2,.1]
-        #     # print('gamma:', gamma)
-        #     if self.k[0]==self.k[1]:
-        #         all_id_l=min(self.v)
-        #         all_id_u=max(self.v)
-        #     elif self.v[0]==self.v[1]:
-        #         all_id_l=min(self.k)
-        #         all_id_u=max(self.k)
-        #     else:
-        #         all_id_l=min(self.v+self.k)
-        #         all_id_u=max(self.v+self.k)
-        #     tl = past_key_values[:all_id_l]
+        # INFO: CALI!
+        # if past_key_values is not None and self.cnt==1 and self.moding(1):
         #     tm = ()
-        #     tu = past_key_values[all_id_u:]
-        #     # bk = None
-        #     # bv = None
-        #     # bb = 2**(self.k_bits)
-        #     for i in range((all_id_u-all_id_l)//2):
-        #         id_l = all_id_l+2*i
-        #         id_u = all_id_l+2*i+1
-        #         flag_k = bool(id_l>=self.k[0] and id_u<=self.k[1])
-        #         flag_v = bool(id_l>=self.v[0] and id_u<=self.v[1])
-        #         # print(self.mode, id_l, id_u,flag_k, flag_v)
-        #         if flag_k:
-        #             k_l = unpack_tensor(past_key_values[id_l][0],self.k_bits,3)
-        #             k_u = unpack_tensor(past_key_values[id_u][0],self.k_bits,3)
-        #             if self.mode==0 or self.mode=='0' or self.mode==1 or self.mode=='1':
-        #                 k_l = (k_l+k_u)//2
-        #             elif self.mode==2 or self.mode=='2' or self.mode==3 or self.mode=='3':
-        #                 k_l = -((-k_l-k_u)//2)
-        #             elif self.mode==4 or self.mode=='4':
-        #                 k_l = (0.55*k_l+0.45*k_u).round().to(torch.int32)
-        #             elif self.mode==5 or self.mode=='5':
-        #                 k_l = (0.45*k_l+0.55*k_u).round().to(torch.int32)
-        #             elif self.moding(20):
-        #                 print('do nothing')
-        #             else:
-        #                 gamma = g_l[self.moding()]
-        #                 k_l = (gamma*k_l + (1-gamma)*k_u).round().to(torch.int32)
-        #             # k_l = ((k_l+k_u)/2).round().to(torch.int32)
-        #             # if bk is None:
-        #             #     bk = torch.randint(0, 2, k_l.shape, dtype=torch.int32)
-        #             #     bk = bk.to(k_l.device)
-        #             # k_l= (k_l+k_u+bk)//2
-        #             # k_l[k_l>=bb]=
-        #             k_l = pack_tensor(k_l,self.k_bits,3)
-        #             k_u = k_l
-        #         if flag_v:
-        #             v_l = unpack_tensor(past_key_values[id_l][4],self.v_bits,3)
-        #             v_u = unpack_tensor(past_key_values[id_u][4],self.v_bits,3)
-        #             if self.mode==0 or self.mode=='0' or self.mode==1 or self.mode=='1':
-        #                 v_l = (v_l+v_u)//2
-        #             elif self.mode==2 or self.mode=='2' or self.mode==3 or self.mode=='3':
-        #                 v_l = -((-v_l-v_u)//2)
-        #             elif self.mode==4 or self.mode=='4':
-        #                 v_l = (0.55*v_l+0.45*v_u).round().to(torch.int32)
-        #             elif self.mode==5 or self.mode=='5':
-        #                 v_l = (0.45*v_l+0.55*v_u).round().to(torch.int32)
-        #             elif self.moding(20):
-        #                 print('do nothing')
-        #             else:
-        #                 gamma = g_l[self.moding()]
-        #                 v_l = (gamma*v_l + (1-gamma)*v_u).round().to(torch.int32)
-        #             # v_l = ((v_l+v_u)/2).round().to(torch.int32)
-        #             # if bv is None:
-        #             #     bv = torch.randint(0, 2, v_l.shape, dtype=torch.int32)
-        #             #     bk = bk.to(v_l.device)
-        #             # v_l = (v_l+v_u)//2
-        #             # v_l[v_l>=bb]=bb
-        #             v_l = pack_tensor(v_l,self.v_bits,3)
-        #             v_u = v_l
+        #     for i in range(32):
+        #         flag_k = bool(i>=self.kq[0])
+        #         flag_v = bool(i>=self.vq[0])
+        #         # print(i,flag_k,flag_v)
+        #         p_l = past_key_values[i]
         #         if flag_k and flag_v:
-        #             tm+=(((k_l,)+past_key_values[id_l][1:4]+(v_l,)+past_key_values[id_l][5:]),)
-        #             tm+=(((k_u,)+past_key_values[id_u][1:4]+(v_u,)+past_key_values[id_u][5:]),)
+        #             p_l = p_l[:2]+((p_l[2]-1/3*p_l[2]),(p_l[3]+1/6*p_l[2]),)+p_l[4:6]+((p_l[6]-1/3*p_l[6]),(p_l[7]+1/6*p_l[6]),)+p_l[8:]
         #         elif flag_k:
-        #             tm+=(((k_l,)+past_key_values[id_l][1:]),)
-        #             tm+=(((k_u,)+past_key_values[id_u][1:]),)
+        #             p_l = p_l[:2]+((p_l[2]-1/3*p_l[2]),(p_l[3]+1/6*p_l[2]),)+p_l[4:]
         #         elif flag_v:
-        #             tm+=((past_key_values[id_l][:4]+(v_l,)+past_key_values[id_l][5:]),)
-        #             tm+=((past_key_values[id_u][:4]+(v_u,)+past_key_values[id_u][5:]),)
-                
-        #         if self.mode==1 or self.mode=='1':
-        #             p_l = tm[-2]
-        #             p_u = tm[-1]
-        #             if flag_k and flag_v:
-        #                 p_l = p_l[:3]+((p_l[3]+0.25*p_l[2]),)+p_l[4:7]+((p_l[7]+0.25*p_l[6]),)+(p_l[-1],)
-        #                 p_u = p_u[:3]+((p_u[3]+0.25*p_u[2]),)+p_u[4:7]+((p_u[7]+0.25*p_u[6]),)+(p_u[-1],)
-        #             elif flag_k:
-        #                 p_l = p_l[:3]+((p_l[3]+0.25*p_l[2]),)+p_l[4:]
-        #                 p_u = p_u[:3]+((p_u[3]+0.25*p_u[2]),)+p_u[4:]
-        #             elif flag_v:
-        #                 p_l = p_l[:7]+((p_l[7]+0.25*p_l[6]),)+(p_l[-1],)
-        #                 p_u = p_u[:7]+((p_u[7]+0.25*p_u[6]),)+(p_u[-1],)
-        #             tm = tm[:-2]+(p_l,p_u,)
-        #         elif self.mode==3 or self.mode=='3':
-        #             p_l = tm[-2]
-        #             p_u = tm[-1]
-        #             if flag_k and flag_v:
-        #                 p_l = p_l[:3]+((p_l[3]-0.25*p_l[2]),)+p_l[4:7]+((p_l[7]-0.25*p_l[6]),)+(p_l[-1],)
-        #                 p_u = p_u[:3]+((p_u[3]-0.25*p_u[2]),)+p_u[4:7]+((p_u[7]-0.25*p_u[6]),)+(p_u[-1],)
-        #             elif flag_k:
-        #                 p_l = p_l[:3]+((p_l[3]-0.25*p_l[2]),)+p_l[4:]
-        #                 p_u = p_u[:3]+((p_u[3]-0.25*p_u[2]),)+p_u[4:]
-        #             elif flag_v:
-        #                 p_l = p_l[:7]+((p_l[7]-0.25*p_l[6]),)+(p_l[-1],)
-        #                 p_u = p_u[:7]+((p_u[7]-0.25*p_u[6]),)+(p_u[-1],)
-        #             tm = tm[:-2]+(p_l,p_u,)
-                
-        #     past_key_values = tl+tm+tu
-        #     # debug_print(past_key_values)
-        #     # debug_print(past_key_values[16])
-        #     # debug_print(past_key_values[30])
+        #             p_l = p_l[:6]+((p_l[6]-1/3*p_l[6]),(p_l[7]+1/6*p_l[6]),)+p_l[8:]
+        #         # else:
+        #         #     p_l = p_l
+        #         tm = tm+(p_l,)
+        #     past_key_values = tm
+            
+        # # INFO: REAL CALI:
+        # if past_key_values is not None and self.cnt==1:
+        #     for i in [0,31]:
+        #         print(f'\n### layer: {i}\n')
+        #         l = past_key_values[i]
+        #         dei_utils.dei_print(l)
+        #     exit(0)
         
         seq_length_with_past = seq_length
         past_key_values_length = 0

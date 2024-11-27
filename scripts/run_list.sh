@@ -18,6 +18,10 @@ anno_list=(2_0_0_0_0_0 )
 anno_list=(${bit}_0_0_0_0_0 )
 # anno_list=(24_16_28_16 )
 
+anno_list=(32_32_32_8_m_0 32_32_32_14_m_0 32_32_32_14_m_1 )
+anno_list=(32_32_32_16_m_0 32_32_32_16_m_1 32_32_32_16_m_2 )
+anno_list=(32_32_32_8_m_0 32_32_32_14_m_0 32_32_32_14_m_1 32_32_32_16_m_0 32_32_32_16_m_1 32_32_32_16_m_2 )
+anno_list=(32_32_32_16_m_1 )
 
 
 echo "numbers of array = ${#anno_list[*]}"
@@ -45,14 +49,14 @@ do
         --residual_length 128 \
         --annotation $anno
 
-    # python3 send.py --model_name_or_path $model \
-    #     --cache_dir ./cached_models \
-    #     --k_bits $bit \
-    #     --v_bits $bit \
-    #     --k_quant_dim 'channel' \
-    #     --v_quant_dim 'token' \
-    #     --group_size 32 \
-    #     --residual_length 128 \
-    #     --annotation $anno
+    python3 send.py --model_name_or_path $model \
+        --cache_dir ./cached_models \
+        --k_bits $bit \
+        --v_bits $bit \
+        --k_quant_dim 'channel' \
+        --v_quant_dim 'token' \
+        --group_size 32 \
+        --residual_length 128 \
+        --annotation $anno
 
 done

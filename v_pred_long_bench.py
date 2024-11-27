@@ -233,10 +233,13 @@ if __name__ == '__main__':
         # datasets = ['narrativeqa']
         datasets = ['multifieldqa_en','multifieldqa_zh','2wikimqa','multi_news','trec','passage_retrieval_en','passage_retrieval_zh']
         datasets = ['multifieldqa_en','multifieldqa_zh','2wikimqa','multi_news','trec',]
-        if '32_32_32_32' in str(model_args.annotation):
-            pass
-        else:
-            datasets += ['hotpotqa','musique','samsum',]
+        # if '32_32_32_32' in str(model_args.annotation):
+        #     pass
+        # else:
+        #     datasets += ['hotpotqa','musique','samsum',]
+        # if model_args.k_bits >= 16:
+        #     datasets = ['hotpotqa','musique','samsum',]
+        datasets = ['hotpotqa','musique','samsum',]
         
         
     # we design specific prompt format and max generation length for each task, feel free to modify them to optimize model output

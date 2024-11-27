@@ -61,15 +61,27 @@ def get_pred(model, tokenizer, data, max_length, max_gen, prompt_format, dataset
         input = tokenizer(prompt, truncation=False, return_tensors="pt").to(device)
         context_length = input.input_ids.shape[-1]
         if dataset == "samsum": # prevent illegal output on samsum (model endlessly repeat "\nDialogue"), might be a prompting issue
-            output = model.generate(
-                **input,
-                max_new_tokens=max_gen,
-                num_beams=1,
-                do_sample=False,
-                temperature=1.0,
-                min_length=context_length+1,
-                eos_token_id=[tokenizer.eos_token_id, tokenizer.encode("\n", add_special_tokens=False)[-1]],
-            )[0]
+            if 'mistral' in model_name.lower():
+                output = model.generate(
+                    **input,
+                    max_new_tokens=max_gen,
+                    num_beams=1,
+                    do_sample=False,
+                    temperature=1.0,
+                    min_length=context_length+1,
+                    eos_token_id=[tokenizer.eos_token_id, tokenizer.encode("\n", add_special_tokens=False)[-1]],
+                    pad_token_id=2,
+                )[0]
+            else:
+                output = model.generate(
+                    **input,
+                    max_new_tokens=max_gen,
+                    num_beams=1,
+                    do_sample=False,
+                    temperature=1.0,
+                    min_length=context_length+1,
+                    eos_token_id=[tokenizer.eos_token_id, tokenizer.encode("\n", add_special_tokens=False)[-1]],
+                )[0]
         elif 'mistral' in model_name.lower():
             output = model.generate(
                 **input,
@@ -180,6 +192,7 @@ if __name__ == '__main__':
             #     if '16' in key or '15' in key or '14' in key:
             #         d_map[key] = 1
             from models.v_mistral_kivi import MistralForCausalLM_KIVI
+            # from models.q_mistral_kivi import MistralForCausalLM_KIVI
             # from models.mistral_kivi import MistralForCausalLM_KIVI
             config.k_bits = model_args.k_bits
             config.v_bits = model_args.v_bits
@@ -223,14 +236,27 @@ if __name__ == '__main__':
         datasets = ["qasper", "multifieldqa_en", "hotpotqa", "2wikimqa", "gov_report", "multi_news", 
                     "trec", "triviaqa", "samsum", "passage_count", "passage_retrieval_en", "lcc", "repobench-p"]
     else:
-        datasets = ["triviaqa", "qasper", "trec", "samsum", "lcc", "repobench-p", "qmsum", "multi_news"]
-        datasets = ["lcc", "repobench-p", "trec", "2wikimqa", "gov_report"]
-        datasets = ['multifieldqa_zh','trec','passage_retrieval_zh','multi_news',]
-        datasets = ['multifieldqa_zh','trec','multi_news',]
-        # datasets = ['multifieldqa_zh','trec',]
-        # datasets = ['multi_news',]
-        if model_args.k_bits >= 16:
-            datasets = ['passage_retrieval_zh','multi_news',]
+        # if model_args.k_bits >= 16:
+        #     datasets = ['passage_retrieval_zh','multi_news',]
+        # if 'm' in str(model_args.annotation):
+        #     datasets = ['multi_news',]
+        # elif 'q' in str(model_args.annotation):
+        #     datasets = ['multifieldqa_zh','trec','multi_news',]
+        # datasets = ['narrativeqa']
+        datasets = ['multifieldqa_en','multifieldqa_zh','2wikimqa','multi_news','trec','passage_retrieval_en','passage_retrieval_zh']
+        datasets = ['multifieldqa_en','multifieldqa_zh','2wikimqa','multi_news','trec',]
+        # if '32_32_32_32' in str(model_args.annotation):
+        #     pass
+        # else:
+        #     datasets += ['hotpotqa','musique','samsum',]
+        # if model_args.k_bits >= 16:
+        #     datasets = ['hotpotqa','musique','samsum',]
+        datasets = ['hotpotqa','musique','samsum',]
+        datasets = ['multifieldqa_zh']
+        datasets = ['multifieldqa_en','multifieldqa_zh','2wikimqa','multi_news','trec','hotpotqa','musique','samsum',]
+        # datasets = ['multifieldqa_en','multifieldqa_zh','2wikimqa','trec','hotpotqa','musique','samsum',]
+        
+        
     # we design specific prompt format and max generation length for each task, feel free to modify them to optimize model output
     dataset2prompt = json.load(open("config/dataset2prompt.json", "r"))
     dataset2maxlen = json.load(open("config/dataset2maxlen.json", "r"))

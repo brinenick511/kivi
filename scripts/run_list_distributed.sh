@@ -26,7 +26,7 @@ do
     echo "running ${anno} in ${gpuid}"
 
 
-    CUDA_VISIBLE_DEVICES=$gpuid python v_pred_long_bench.py --model_name_or_path $model \
+    CUDA_VISIBLE_DEVICES=$gpuid python q_pred_long_bench.py --model_name_or_path $model \
         --cache_dir ./cached_models \
         --k_bits $bit \
         --v_bits $bit \
