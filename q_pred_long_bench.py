@@ -256,10 +256,12 @@ if __name__ == '__main__':
         datasets = ['multifieldqa_en','multifieldqa_zh','2wikimqa','multi_news','trec','hotpotqa','musique','samsum',]
         # datasets = ['multifieldqa_en','multifieldqa_zh','2wikimqa','trec','hotpotqa','musique','samsum',]
         datasets = ['multi_news', 'samsum','2wikimqa','multifieldqa_zh']
-        idx = model_args.annotation.split('_')[-1]
-        print(f'idx={idx}')
-        datasets = [datasets[int(idx)],]
-        print(f'datasets={datasets}')
+        # idx = model_args.annotation.split('_')[-1]
+        # print(f'idx={idx}')
+        # datasets = [datasets[int(idx)],]
+        # print(f'datasets={datasets}')
+        datasets = ['multifieldqa_zh']
+        datasets = ['multifieldqa_zh','hotpotqa','samsum','musique',]
         
         
     # we design specific prompt format and max generation length for each task, feel free to modify them to optimize model output

@@ -242,7 +242,8 @@ def triton_quantize_and_pack_along_last_dim(data: torch.Tensor, group_size: int,
 								BLOCK_SIZE_N=BLOCK_SIZE_N, num_warps=8) 
 	# mn = torch.min(data, dim=-1, keepdim=True)[0].squeeze(-1)
 	# mx = torch.max(data, dim=-1, keepdim=True)[0].squeeze(-1)
-	if 'test' in anno:
+	# if 'test' in anno:
+	if anno is not None:
 		scale = (mx - mn) / (2 ** bit)
 		data = data - mn.unsqueeze(-1)
 		data.div_(scale.unsqueeze(-1))

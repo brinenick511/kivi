@@ -131,8 +131,10 @@ class MistralAttention_KIVI(nn.Module):
         self.v_bits = 1 if ( layer_idx>=v_q[0] and layer_idx<v_q[1] ) else 2
         # self.gamma = int(l[-1].strip()) * (1/56)
         # self.gamma = int(l[-1].strip()) * (1/12)
-        datasets = ['multi_news', 'samsum','2wikimqa','multifieldqa_zh']
-        self.dataset = datasets[int(l[-1].strip())]
+        # datasets = ['multi_news', 'samsum','2wikimqa','multifieldqa_zh']
+        # self.dataset = datasets[int(l[-1].strip())]
+        self.kq = int(l[-2].strip())
+        self.vq = int(l[-1].strip())
         
         self.group_size = config.group_size
         self.residual_length = config.residual_length
@@ -414,7 +416,7 @@ class MistralFlashAttention_KIVI(MistralAttention_KIVI):
         #         "The current flash attention version does not support sliding window attention, for a more memory efficient implementation"
         #         " make sure to upgrade flash-attn library."
         #     )
-
+        anno=None
         if past_key_value is not None:
             # INFO: decoding
             key_states_quant_trans = past_key_value[0]
@@ -453,9 +455,11 @@ class MistralFlashAttention_KIVI(MistralAttention_KIVI):
 
             if key_states_full.shape[-2] == self.residual_length:
                 assert self.residual_length % self.group_size == 0
-                # print(f'# {self.layer_idx}, K, Decoding, {key_states_full.transpose(2, 3).shape}')
-                anno = f'{self.dataset}/d_k_{self.layer_idx}'
-                anno = 'test'
+                # anno = 'test'
+                if self.kq==2:
+                    anno='test'
+                else:
+                    anno=None
                 key_states_quant_trans_new, key_scale_trans_new, key_mn_trans_new = triton_quantize_and_pack_along_last_dim(key_states_full.transpose(2, 3).contiguous(), 
                                                                                                                             self.group_size, 
                                                                                                                             self.k_bits,
@@ -463,8 +467,9 @@ class MistralFlashAttention_KIVI(MistralAttention_KIVI):
                                                                                                                             )
                 # TODO: Cali_K New
                 # if self.k_bits==1:
-                #     key_mn_trans_new += (key_scale_trans_new*self.gamma)
-                #     key_scale_trans_new *= (1 - 2*self.gamma)
+                if self.k_bits==2 and self.kq==1:
+                    key_mn_trans_new += (key_scale_trans_new*self.gamma)
+                    key_scale_trans_new *= (1 - 2*self.gamma)
                 # key_mn_trans_new += (key_scale_trans_new*self.gamma)
                 # key_scale_trans_new *= (1 - 2*self.gamma)
                 
@@ -518,9 +523,10 @@ class MistralFlashAttention_KIVI(MistralAttention_KIVI):
 
             if value_full_length > self.residual_length:
                 assert value_full_length == self.residual_length + 1
-                # print(f'# {self.layer_idx}, V, Decoding, {value_states_full[:, :, :1, :].shape}')
-                anno = f'{self.dataset}/d_v_{self.layer_idx}'
-                # anno = 'test'
+                if self.vq==2:
+                    anno='test'
+                else:
+                    anno=None
                 
                 value_states_quant_new, scale, mn = triton_quantize_and_pack_along_last_dim(value_states_full[:, :, :1, :].contiguous(), 
                                                                                                 self.group_size, 
@@ -529,8 +535,9 @@ class MistralFlashAttention_KIVI(MistralAttention_KIVI):
                                                                                                 )
                 # TODO: Cali_V New
                 # if self.v_bits==1:
-                #     mn += (scale*self.gamma)
-                #     scale *= (1 - 2*self.gamma)
+                if self.v_bits==2 and self.vq==1:
+                    mn += (scale*self.gamma)
+                    scale *= (1 - 2*self.gamma)
                 # mn += (scale*self.gamma)
                 # scale *= (1 - 2*self.gamma)
                 
@@ -584,9 +591,10 @@ class MistralFlashAttention_KIVI(MistralAttention_KIVI):
                 key_states_quant = key_states
                 key_states_full = None
             if key_states_quant is not None:
-                # print(f'# {self.layer_idx}, K, Prefilling, {key_states_quant.transpose(2, 3).shape}')
-                anno = f'{self.dataset}/p_k_{self.layer_idx}'
-                anno = 'test'
+                if self.kq==2:
+                    anno='test'
+                else:
+                    anno=None
                 
                 key_states_quant_trans, key_scale_trans, key_mn_trans = triton_quantize_and_pack_along_last_dim(
                     key_states_quant.transpose(2, 3).contiguous(), self.group_size, self.k_bits, 
@@ -594,8 +602,9 @@ class MistralFlashAttention_KIVI(MistralAttention_KIVI):
                     )
                 # TODO: Cali_K
                 # if self.k_bits==1:
-                #     key_mn_trans += (key_scale_trans*self.gamma)
-                #     key_scale_trans *= (1 - 2*self.gamma)
+                if self.k_bits==2 and self.kq == 1:
+                    key_mn_trans += (key_scale_trans*self.gamma)
+                    key_scale_trans *= (1 - 2*self.gamma)
                 # key_mn_trans += (key_scale_trans*self.gamma)
                 # key_scale_trans *= (1 - 2*self.gamma)
                 
@@ -612,9 +621,10 @@ class MistralFlashAttention_KIVI(MistralAttention_KIVI):
             else:
                 value_states_quant = value_states[:, :, :-self.residual_length, :].contiguous()
                 value_states_full = value_states[:, :, -self.residual_length:, :].contiguous()
-                # print(f'# {self.layer_idx}, V, Prefilling, {value_states_quant.shape}')
-                anno = f'{self.dataset}/p_v_{self.layer_idx}'
-                # anno = 'test'
+                if self.vq==2:
+                    anno='test'
+                else:
+                    anno=None
                 
                 value_states_quant, value_scale, value_mn = triton_quantize_and_pack_along_last_dim(
                     value_states_quant, self.group_size, self.v_bits,
@@ -622,8 +632,9 @@ class MistralFlashAttention_KIVI(MistralAttention_KIVI):
                     )
                 # TODO: Cali_V
                 # if self.v_bits==1:
-                #     value_mn += (value_scale*self.gamma)
-                #     value_scale *= (1 - 2*self.gamma)
+                if self.v_bits==2 and self.vq == 1:
+                    value_mn += (value_scale*self.gamma)
+                    value_scale *= (1 - 2*self.gamma)
                 # value_mn += (value_scale*self.gamma)
                 # value_scale *= (1 - 2*self.gamma)
                 
