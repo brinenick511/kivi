@@ -457,8 +457,8 @@ class MistralFlashAttention_KIVI(MistralAttention_KIVI):
                 # if self.k_bits==1:
                 #     key_mn_trans_new += (key_scale_trans_new*self.gamma)
                 #     key_scale_trans_new *= (1 - 2*self.gamma)
-                key_mn_trans_new += (key_scale_trans_new*self.gamma)
-                key_scale_trans_new *= (1 - 2*self.gamma)
+                # key_mn_trans_new += (key_scale_trans_new*self.gamma)
+                # key_scale_trans_new *= (1 - 2*self.gamma)
                 
                 key_states_full = None
                 if key_states_quant_trans is not None:
@@ -517,8 +517,8 @@ class MistralFlashAttention_KIVI(MistralAttention_KIVI):
                 # if self.v_bits==1:
                 #     mn += (scale*self.gamma)
                 #     scale *= (1 - 2*self.gamma)
-                mn += (scale*self.gamma)
-                scale *= (1 - 2*self.gamma)
+                # mn += (scale*self.gamma)
+                # scale *= (1 - 2*self.gamma)
                 
                 value_states_full = value_states_full[:, :, 1:, :].contiguous()
                 if value_states_quant is not None:
@@ -577,8 +577,9 @@ class MistralFlashAttention_KIVI(MistralAttention_KIVI):
                 # if self.k_bits==1:
                 #     key_mn_trans += (key_scale_trans*self.gamma)
                 #     key_scale_trans *= (1 - 2*self.gamma)
-                key_mn_trans += (key_scale_trans*self.gamma)
-                key_scale_trans *= (1 - 2*self.gamma)
+                # key_mn_trans += (key_scale_trans*self.gamma)
+                # key_scale_trans *= (1 - 2*self.gamma)
+                
             else:
                 key_states_quant_trans = None
                 key_scale_trans = None
@@ -599,8 +600,9 @@ class MistralFlashAttention_KIVI(MistralAttention_KIVI):
                 # if self.v_bits==1:
                 #     value_mn += (value_scale*self.gamma)
                 #     value_scale *= (1 - 2*self.gamma)
-                value_mn += (value_scale*self.gamma)
-                value_scale *= (1 - 2*self.gamma)
+                # value_mn += (value_scale*self.gamma)
+                # value_scale *= (1 - 2*self.gamma)
+                
         past_key_value = (
             key_states_quant_trans, key_states_full, key_scale_trans, key_mn_trans,
             value_states_quant, value_states_full, value_scale, value_mn, kv_seq_len
