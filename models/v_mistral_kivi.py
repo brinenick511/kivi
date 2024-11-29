@@ -135,6 +135,7 @@ class MistralAttention_KIVI(nn.Module):
         # self.dataset = datasets[int(l[-1].strip())]
         self.kq = int(l[-2].strip())
         self.vq = int(l[-1].strip())
+        self.gamma = (1/56)*3
         
         self.group_size = config.group_size
         self.residual_length = config.residual_length

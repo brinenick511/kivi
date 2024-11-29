@@ -1,3 +1,5 @@
+#!/bin/bash
+
 gpuid=$1
 anno_list=$2
 bit=${3:-"2"}
@@ -23,7 +25,8 @@ sleep 1
 
 for anno in ${anno_array[@]}
 do
-    echo "running ${anno} in ${gpuid}"
+    # echo "running ${anno} in ${gpuid}"
+    sleep 1
 
 
     CUDA_VISIBLE_DEVICES=$gpuid python q_pred_long_bench.py --model_name_or_path $model \

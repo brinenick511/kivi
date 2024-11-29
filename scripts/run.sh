@@ -7,7 +7,7 @@ gpuid=9
 anno=16_16_16_16_q_0
 bit=16
 
-anno=32_32_32_32_test_3
+anno=24_8_32_32_test_1_2
 bit=2
 
 CUDA_VISIBLE_DEVICES=$gpuid python q_pred_long_bench.py --model_name_or_path $model \
