@@ -162,6 +162,7 @@ if __name__ == '__main__':
             config.group_size = model_args.group_size
             config.residual_length = model_args.residual_length
             config.use_flash = True # Note: We activate the flashattention to speed up the inference
+            config.annotation = str(model_args.annotation).strip()
             model = LlamaForCausalLM_KIVI.from_pretrained(
                 pretrained_model_name_or_path=model_args.model_name_or_path,
                 config=config,

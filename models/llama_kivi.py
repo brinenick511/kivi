@@ -7,7 +7,7 @@ import torch.nn.functional as F
 from torch import nn
 
 from quant.new_pack import triton_quantize_and_pack_along_last_dim
-from quant.matmul import cuda_bmm_fA_qB_outer
+from quant.matmul import cuda_bmm_fA_qB_outer, triton_bmm_fA_qB_outer
 
 from transformers.models.llama.configuration_llama import *
 from transformers.models.llama.modeling_llama import *
@@ -15,11 +15,13 @@ from transformers.modeling_attn_mask_utils import _prepare_4d_causal_attention_m
 
 _CONFIG_FOR_DOC = "LlamaConfig"
 
+import dei_utils as dei
+
 
 class LlamaAttention_KIVI(nn.Module):
     """Multi-headed attention from 'Attention Is All You Need' paper"""
 
-    def __init__(self, config: LlamaConfig):
+    def __init__(self, config: LlamaConfig, layer_idx: int):
         super().__init__()
         self.config = config
         self.attention_dropout = config.attention_dropout
@@ -31,10 +33,39 @@ class LlamaAttention_KIVI(nn.Module):
         self.max_position_embeddings = config.max_position_embeddings
         self.rope_theta = config.rope_theta
         self.is_causal = True
-        self.k_bits = config.k_bits
-        self.v_bits = config.v_bits
+        # self.k_bits = config.k_bits
+        # self.v_bits = config.v_bits
         self.group_size = config.group_size
         self.residual_length = config.residual_length
+        
+        # ADDED:
+        l=config.annotation.split('_')
+        k_q = [int(l[0]),32]
+        v_q = [int(l[1]),32]
+        self.k_bits = 1 if ( layer_idx>=k_q[0] and layer_idx<k_q[1] ) else 2
+        self.v_bits = 1 if ( layer_idx>=v_q[0] and layer_idx<v_q[1] ) else 2
+        # self.gamma = int(l[-1].strip()) * (1/56)
+        # self.gamma = int(l[-1].strip()) * (1/12)
+        # datasets = ['multi_news', 'samsum','2wikimqa','multifieldqa_zh']
+        # self.dataset = datasets[int(l[-1].strip())]
+        self.kq = 1
+        self.vq = 1
+        
+        g1 = [0/6,1/6,2/6,]
+        g2 = [0,0.045,0.09,]
+        
+        # self.gamma = ['na',2/12,2/56,'na']
+        self.gamma = ['na',g1[int(l[-2].strip())],g2[int(l[-1].strip())],'na']
+        
+        k_m = int(l[2])
+        v_m = int(l[3])
+        self.km=False
+        self.vm=False
+        if self.layer_idx >= k_m and self.layer_idx % 2 == 1:
+            self.km=True
+        if self.layer_idx >= v_m and self.layer_idx % 2 == 1:
+            self.vm=True
+        # ADDED:
 
         if (self.head_dim * self.num_heads) != self.hidden_size:
             raise ValueError(
@@ -337,18 +368,39 @@ class LlamaFlashAttention_KIVI(LlamaAttention_KIVI):
         assert self.num_key_value_groups == 1
         # [bsz, nh, t, hd]
         if past_key_value is not None:
-            key_states_quant_trans = past_key_value[0]
-            key_states_full = past_key_value[1]
-            key_scale_trans = past_key_value[2]
-            key_mn_trans = past_key_value[3]
-            value_states_quant = past_key_value[4]
-            value_states_full = past_key_value[5]
-            value_scale = past_key_value[6]
-            value_mn = past_key_value[7]
+            # INFO: prefill
+            # key_states_quant_trans = past_key_value[0]
+            # key_states_full = past_key_value[1]
+            # key_scale_trans = past_key_value[2]
+            # key_mn_trans = past_key_value[3]
+            # value_states_quant = past_key_value[4]
+            # value_states_full = past_key_value[5]
+            # value_scale = past_key_value[6]
+            # value_mn = past_key_value[7]
+            # ADDED:
+            key_states_full = past_key_value[self.layer_idx][1]
+            key_scale_trans = past_key_value[self.layer_idx][2]
+            key_mn_trans = past_key_value[self.layer_idx][3]
+            value_states_full = past_key_value[self.layer_idx][5]
+            value_scale = past_key_value[self.layer_idx][6]
+            value_mn = past_key_value[self.layer_idx][7]
+            if self.km:
+                key_states_quant_trans = past_key_value[self.layer_idx-1][0][:,:,:, :self.k_bits*key_mn_trans.shape[-1] ]
+            else:
+                key_states_quant_trans = past_key_value[self.layer_idx][0]
+            if self.vm:
+                value_states_quant = past_key_value[self.layer_idx-1][4][:,:, :value_mn.shape[-2] ,:]
+            else:
+                value_states_quant = past_key_value[self.layer_idx][4]
+            # ADDED:
 
             if key_states_quant_trans is not None:
-                att_qkquant = cuda_bmm_fA_qB_outer(self.group_size, query_states, key_states_quant_trans, 
-                                key_scale_trans, key_mn_trans, self.k_bits)
+                if self.k_bits == 1:
+                    att_qkquant = triton_bmm_fA_qB_outer(self.group_size, query_states, key_states_quant_trans, 
+                                    key_scale_trans, key_mn_trans, self.k_bits)
+                else:
+                    att_qkquant = cuda_bmm_fA_qB_outer(self.group_size, query_states, key_states_quant_trans, 
+                                    key_scale_trans, key_mn_trans, self.k_bits)
                 # att_qkquant_ref = triton_bmm_fA_qB_outer(self.group_size, query_states, key_states_quant_trans, 
                 #                 key_scale_trans, key_mn_trans, self.k_bits)
                 # error = torch.abs(att_qkquant - att_qkquant_ref).float()
@@ -588,17 +640,18 @@ class LlamaFlashAttention_KIVI(LlamaAttention_KIVI):
     
 
 class LlamaDecoderLayer_KIVI(nn.Module):
-    def __init__(self, config: LlamaConfig):
+    def __init__(self, config: LlamaConfig, layer_idx: int):
         super().__init__()
         self.hidden_size = config.hidden_size
         self.self_attn = (
-            LlamaAttention_KIVI(config=config)
+            LlamaAttention_KIVI(config=config, layer_idx=layer_idx)
             if not getattr(config, "use_flash", False)
-            else LlamaFlashAttention_KIVI(config=config)
+            else LlamaFlashAttention_KIVI(config=config, layer_idx=layer_idx)
         )
         self.mlp = LlamaMLP(config)
         self.input_layernorm = LlamaRMSNorm(config.hidden_size, eps=config.rms_norm_eps)
         self.post_attention_layernorm = LlamaRMSNorm(config.hidden_size, eps=config.rms_norm_eps)
+        self.layer_idx=layer_idx
 
     def forward(
         self,
@@ -675,7 +728,7 @@ class LlamaModel_KIVI(LlamaPreTrainedModel):
         self.vocab_size = config.vocab_size
 
         self.embed_tokens = nn.Embedding(config.vocab_size, config.hidden_size, self.padding_idx)
-        self.layers = nn.ModuleList([LlamaDecoderLayer_KIVI(config) for _ in range(config.num_hidden_layers)])
+        self.layers = nn.ModuleList([LlamaDecoderLayer_KIVI(config,idx) for idx in range(config.num_hidden_layers)])
         self.norm = LlamaRMSNorm(config.hidden_size, eps=config.rms_norm_eps)
 
         self.gradient_checkpointing = False
@@ -701,6 +754,15 @@ class LlamaModel_KIVI(LlamaPreTrainedModel):
         output_hidden_states: Optional[bool] = None,
         return_dict: Optional[bool] = None,
     ) -> Union[Tuple, BaseModelOutputWithPast]:
+        # INFO: count
+        if seq_length !=1: # prefill
+            self.cnt=0
+            self.idx+=1
+        else: # decode
+            self.cnt+=1
+        print(f'\n###\n{self.idx}, {self.cnt}\n###\n')
+        if self.idx==2:
+            exit(0)
         output_attentions = output_attentions if output_attentions is not None else self.config.output_attentions
         output_hidden_states = (
             output_hidden_states if output_hidden_states is not None else self.config.output_hidden_states

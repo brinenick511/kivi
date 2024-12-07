@@ -1,10 +1,12 @@
 model=/new_data/yanghq/models/mistralai/Mistral-7B-Instruct-v0.2
+# model=/new_data/yanghq/models/meta-llama/Llama-2-7b-chat-hf
+# model=/new_data/yanghq/models/lmsys/longchat-7b-v1.5-32k
 # gpuid=$1
 # bit=$2
 
-gpuid=0
+gpuid=5,6
 
-anno=16_16_16_16_q_0
+anno=16_16_16_16_q_0_0
 bit=16
 
 # anno=26_26_32_32_test_0_0
