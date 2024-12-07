@@ -250,7 +250,7 @@ def triton_quantize_and_pack_along_last_dim(data: torch.Tensor, group_size: int,
 		data = data.view(-1, T)
 	elif anno == 1:
 		scale = (mx - mn) / (2 ** bit - 1)
-		print('Qunat_None')
+		# print('Qunat_None')
 		return None, scale.reshape(scale_mn_shape), mn.reshape(scale_mn_shape)
 	elif anno == 2:
 		scale = (mx - mn) / (2 ** bit)

@@ -97,9 +97,14 @@ class MistralAttention_KIVI(nn.Module):
         # self.gamma = int(l[-1].strip()) * (1/12)
         # datasets = ['multi_news', 'samsum','2wikimqa','multifieldqa_zh']
         # self.dataset = datasets[int(l[-1].strip())]
-        self.kq = int(l[-2].strip())
-        self.vq = int(l[-1].strip())
-        self.gamma = (1/56)*3
+        self.kq = 1
+        self.vq = 1
+        
+        g1 = [0/6,1/6,2/6,]
+        g2 = [0,0.045,0.09,]
+        
+        # self.gamma = ['na',2/12,2/56,'na']
+        self.gamma = ['na',g1[int(l[-2].strip())],g2[int(l[-1].strip())],'na']
         
         k_m = int(l[2])
         v_m = int(l[3])
@@ -391,12 +396,12 @@ class MistralFlashAttention_KIVI(MistralAttention_KIVI):
         #         "The current flash attention version does not support sliding window attention, for a more memory efficient implementation"
         #         " make sure to upgrade flash-attn library."
         #     )
-        print(f'layer:{self.layer_idx}, kq={self.kq}, vq={self.vq}, km={self.km}, vm={self.vm}')
         if past_key_value is not None:
             # INFO: decoding
             
             # if self.layer_idx==31:
-            #     dei.debug(past_key_value)
+            #     dei.debug(past_key_value[0])
+            #     dei.debug(past_key_value[30])
             # key_states_quant_trans = past_key_value[0]
             # key_states_full = past_key_value[1]
             # key_scale_trans = past_key_value[2]
@@ -463,12 +468,10 @@ class MistralFlashAttention_KIVI(MistralAttention_KIVI):
                                                                                                                             anno,
                                                                                                                             )
                 # TODO: Cali_K New
-                # if self.k_bits==1:
-                # if self.k_bits==2 and self.kq==1:
-                #     key_mn_trans_new += (key_scale_trans_new*self.gamma)
-                #     key_scale_trans_new *= (1 - 2*self.gamma)
-                # key_mn_trans_new += (key_scale_trans_new*self.gamma)
-                # key_scale_trans_new *= (1 - 2*self.gamma)
+                if self.kq==1:
+                    key_mn_trans_new += (key_scale_trans_new*self.gamma[self.k_bits])
+                    key_scale_trans_new *= (1 - 2*self.gamma[self.k_bits])
+
                 
                 key_states_full = None
                 if self.km:
@@ -541,6 +544,9 @@ class MistralFlashAttention_KIVI(MistralAttention_KIVI):
                                                                                                 anno,
                                                                                                 )
                 # TODO: Cali_V New
+                if self.vq==1:
+                    mn += (scale*self.gamma[self.v_bits])
+                    scale *= (1 - 2*self.gamma[self.v_bits])
                 # if self.v_bits==1:
                 # if self.v_bits==2 and self.vq==1:
                 #     mn += (scale*self.gamma)
@@ -616,12 +622,9 @@ class MistralFlashAttention_KIVI(MistralAttention_KIVI):
                     anno,
                     )
                 # TODO: Cali_K
-                # if self.k_bits==1:
-                # if self.k_bits==2 and self.kq == 1:
-                #     key_mn_trans += (key_scale_trans*self.gamma)
-                #     key_scale_trans *= (1 - 2*self.gamma)
-                # key_mn_trans += (key_scale_trans*self.gamma)
-                # key_scale_trans *= (1 - 2*self.gamma)
+                if self.kq == 1:
+                    key_mn_trans += (key_scale_trans*self.gamma[self.k_bits])
+                    key_scale_trans *= (1 - 2*self.gamma[self.k_bits])
                 
             else:
                 key_states_quant_trans = None
@@ -648,12 +651,9 @@ class MistralFlashAttention_KIVI(MistralAttention_KIVI):
                     anno,
                     )
                 # TODO: Cali_V
-                # if self.v_bits==1:
-                # if self.v_bits==2 and self.vq == 1:
-                #     value_mn += (value_scale*self.gamma)
-                #     value_scale *= (1 - 2*self.gamma)
-                # value_mn += (value_scale*self.gamma)
-                # value_scale *= (1 - 2*self.gamma)
+                if self.vq == 1:
+                    value_mn += (value_scale*self.gamma[self.v_bits])
+                    value_scale *= (1 - 2*self.gamma[self.v_bits])
                 
         past_key_value = (
             key_states_quant_trans, key_states_full, key_scale_trans, key_mn_trans,
@@ -964,10 +964,10 @@ class MistralModel_KIVI(MistralPreTrainedModel):
             self.idx+=1
         else: # decode
             self.cnt+=1
-        if self.idx==2:
-            exit(0)
+        # if self.idx==2:
+        #     exit(0)
+        # print(f'\n###\n{self.idx}, {self.cnt}\n###\n')
         torch.cuda.empty_cache()
-        print(f'\n###\n{self.idx}, {self.cnt}\n###\n')
         
         # INFO: MERGE!
         # if past_key_values is not None and self.cnt==1 and (self.k[0]!=self.k[1] or self.v[0]!=self.v[1]):
@@ -1127,6 +1127,7 @@ class MistralModel_KIVI(MistralPreTrainedModel):
 
             if output_attentions:
                 all_self_attns += (layer_outputs[1],)
+            torch.cuda.empty_cache()
 
         hidden_states = self.norm(hidden_states)
 
@@ -1137,6 +1138,7 @@ class MistralModel_KIVI(MistralPreTrainedModel):
         next_cache = next_decoder_cache if use_cache else None
         if not return_dict:
             return tuple(v for v in [hidden_states, next_cache, all_hidden_states, all_self_attns] if v is not None)
+        
         return BaseModelOutputWithPast(
             last_hidden_state=hidden_states,
             past_key_values=next_cache,

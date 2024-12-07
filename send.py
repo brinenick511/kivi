@@ -11,6 +11,8 @@ import json
 import csv
 from filelock import FileLock
 
+import dei_utils as dei
+
 from utils.process_args import process_args, define_path
 
 def parse_args(args=None):
@@ -59,7 +61,8 @@ if __name__ == "__main__":
     if os.path.exists(path):
         with open(path, 'r', encoding='utf-8') as file:
             # s=f'q = ( {l[0]}, {l[1]} )\nm = ( {l[2]}, {l[3]} )\n\n{output_path}\n'
-            s=f'gamma = {l[-1]}\n\nasym-kv\n{output_path}\n'
+            # s=f'gamma = {l[-1]}\n\nasym-kv\n{output_path}\n'
+            s=f'\n{l[-2]}, {l[-1]}\n\n{output_path}\n'
             file_content = file.read()
             # data = json.loads(file_content)
             # ol = []
