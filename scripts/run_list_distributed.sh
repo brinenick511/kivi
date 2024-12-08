@@ -5,6 +5,8 @@ anno_list=$2
 bit=${3:-"2"}
 
 model=/new_data/yanghq/models/mistralai/Mistral-7B-Instruct-v0.2
+model=/new_data/yanghq/models/meta-llama/Llama-2-7b-chat-hf
+
 # anno_list=(2_30_32_16_32_10 2_30_32_16_32_11 2_30_32_16_32_12 2_30_32_16_32_13 2_30_32_16_32_14 2_30_32_16_32_15 2_32_32_14_32_10 2_32_32_14_32_11 2_32_32_14_32_12 2_32_32_14_32_13 2_32_32_14_32_14 2_32_32_14_32_15 )
 
 
