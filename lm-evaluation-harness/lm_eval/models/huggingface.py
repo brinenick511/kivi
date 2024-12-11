@@ -6,7 +6,7 @@ from transformers.models.auto.modeling_auto import (
     MODEL_FOR_CAUSAL_LM_MAPPING_NAMES,
     MODEL_FOR_SEQ_TO_SEQ_CAUSAL_LM_MAPPING_NAMES,
 )
-from peft import __version__ as PEFT_VERSION, PeftModel
+# from peft import __version__ as PEFT_VERSION, PeftModel
 
 import copy
 from collections import defaultdict
@@ -226,12 +226,12 @@ class HFLM(LM):
                 **model_kwargs,
             )
 
-        if peft:
-            if load_in_4bit:
-                assert PEFT_VERSION >= "0.4.0", "load_in_4bit requires peft >= 0.4.0"
-            self._model = PeftModel.from_pretrained(
-                self._model, peft, revision=revision
-            )
+        # if peft:
+        #     if load_in_4bit:
+        #         assert PEFT_VERSION >= "0.4.0", "load_in_4bit requires peft >= 0.4.0"
+        #     self._model = PeftModel.from_pretrained(
+        #         self._model, peft, revision=revision
+        #     )
 
         # forever after, access self._model through self.model property
         self.model.eval()

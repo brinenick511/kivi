@@ -3,7 +3,7 @@ model=/new_data/yanghq/models/mistralai/Mistral-7B-Instruct-v0.2
 # gpuid=$1
 # bit=$2
 
-gpuid=9
+gpuid=1
 
 anno=16_16_16_16_bl_0_0
 bit=16

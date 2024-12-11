@@ -64,7 +64,7 @@ if __name__ == "__main__":
             # s=f'gamma = {l[-1]}\n\nasym-kv\n{output_path}\n'
             s=f'\n{l[-2]}, {l[-1]}\n\n{output_path}\n'
             file_content = file.read()
-            if 'll' in output_path:
+            if 'll' in output_path and False:
                 data = json.loads(file_content)
                 ol = []
                 kl = list(data.keys())
@@ -106,7 +106,7 @@ if __name__ == "__main__":
                         writer = csv.writer(ffile)
                         writer.writerow(new_data)
         # send_qq_email(f'{output_path}: Success',f'{k},{v},{m}\n{ml[m]}\n\n{output_path}\n'+file_content)
-            if 'asym' in output_path or 'kivi' in output_path:
+            if 'asym' in output_path or 'kivi' in output_path or True:
                 send_qq_email(f'{output_path}: Success',f'{s}\n\n\n{file_content}')
                 print(f'{output_path}: Success')
     else:

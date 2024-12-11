@@ -272,13 +272,14 @@ if __name__ == '__main__':
         datasets = ['multifieldqa_zh','multifieldqa_en','2wikimqa','trec','hotpotqa','musique','samsum','qasper','triviaqa','passage_count','lcc',]
         datasets = ['multifieldqa_en','2wikimqa','trec','samsum','qasper','triviaqa','passage_count','lcc',]
         datasets = ['multifieldqa_zh','hotpotqa','musique',]
+        if 'llama' in model_args.model_name_or_path.lower():
+            datasets = ['multi_news',]
         if model_args.k_bits >= 16:
             datasets = ['multifieldqa_zh','multifieldqa_en','2wikimqa','trec','hotpotqa','musique','samsum','qasper','triviaqa','passage_count','lcc','multi_news']
             # datasets = ['multi_news']
         if 'mistral' in model_args.model_name_or_path.lower():
             datasets = ['qasper','triviaqa','passage_count','lcc',]
-            datasets = ['passage_count',]
-            datasets = ['lcc',]
+            datasets = ['passage_count','lcc',]
         
         
     # we design specific prompt format and max generation length for each task, feel free to modify them to optimize model output

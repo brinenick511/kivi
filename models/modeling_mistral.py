@@ -29,17 +29,19 @@ import torch.utils.checkpoint
 from torch import nn
 from torch.nn import BCEWithLogitsLoss, CrossEntropyLoss, MSELoss
 
-from quant.new_pack import triton_quantize_and_pack_along_last_dim, debugging, unpack_tensor,pack_tensor
-from quant.matmul import cuda_bmm_fA_qB_outer, triton_bmm_fA_qB_outer
-
-from transformers.models.mistral.configuration_mistral import *
-from transformers.models.mistral.modeling_mistral import *
+from transformers.activations import ACT2FN
 from transformers.modeling_attn_mask_utils import _prepare_4d_causal_attention_mask
-
-_CONFIG_FOR_DOC = "MistralConfig"
-
-import dei_utils as dei
-# DEBUG: START HERE
+from transformers.modeling_outputs import BaseModelOutputWithPast, CausalLMOutputWithPast, SequenceClassifierOutputWithPast
+from transformers.modeling_utils import PreTrainedModel
+from transformers.utils import (
+    add_start_docstrings,
+    add_start_docstrings_to_model_forward,
+    is_flash_attn_2_available,
+    logging,
+    replace_return_docstrings,
+)
+# from .configuration_mistral import MistralConfig
+from transformers.models.mistral.configuration_mistral import MistralConfig
 
 if is_flash_attn_2_available():
     from flash_attn import flash_attn_func, flash_attn_varlen_func
@@ -47,6 +49,13 @@ if is_flash_attn_2_available():
 
     _flash_supports_window_size = "window_size" in list(inspect.signature(flash_attn_func).parameters)
 
+
+logger = logging.get_logger(__name__)
+
+_CONFIG_FOR_DOC = "MistralConfig"
+
+
+# Copied from transformers.models.llama.modeling_llama._get_unpad_data
 def _get_unpad_data(attention_mask):
     seqlens_in_batch = attention_mask.sum(dim=-1, dtype=torch.int32)
     indices = torch.nonzero(attention_mask.flatten(), as_tuple=False).flatten()
@@ -58,7 +67,116 @@ def _get_unpad_data(attention_mask):
         max_seqlen_in_batch,
     )
 
-def repeat_kv_quant(hidden_states: torch.Tensor, n_rep: int) -> torch.Tensor:
+
+# Copied from transformers.models.llama.modeling_llama.LlamaRMSNorm with Llama->Mistral
+class MistralRMSNorm(nn.Module):
+    def __init__(self, hidden_size, eps=1e-6):
+        """
+        MistralRMSNorm is equivalent to T5LayerNorm
+        """
+        super().__init__()
+        self.weight = nn.Parameter(torch.ones(hidden_size))
+        self.variance_epsilon = eps
+
+    def forward(self, hidden_states):
+        input_dtype = hidden_states.dtype
+        hidden_states = hidden_states.to(torch.float32)
+        variance = hidden_states.pow(2).mean(-1, keepdim=True)
+        hidden_states = hidden_states * torch.rsqrt(variance + self.variance_epsilon)
+        return self.weight * hidden_states.to(input_dtype)
+
+
+# Copied from transformers.models.llama.modeling_llama.LlamaRotaryEmbedding with Llama->Mistral
+class MistralRotaryEmbedding(nn.Module):
+    def __init__(self, dim, max_position_embeddings=2048, base=10000, device=None):
+        super().__init__()
+
+        self.dim = dim
+        self.max_position_embeddings = max_position_embeddings
+        self.base = base
+        inv_freq = 1.0 / (self.base ** (torch.arange(0, self.dim, 2).float().to(device) / self.dim))
+        self.register_buffer("inv_freq", inv_freq, persistent=False)
+
+        # Build here to make `torch.jit.trace` work.
+        self._set_cos_sin_cache(
+            seq_len=max_position_embeddings, device=self.inv_freq.device, dtype=torch.get_default_dtype()
+        )
+
+    def _set_cos_sin_cache(self, seq_len, device, dtype):
+        self.max_seq_len_cached = seq_len
+        t = torch.arange(self.max_seq_len_cached, device=device, dtype=self.inv_freq.dtype)
+
+        freqs = torch.einsum("i,j->ij", t, self.inv_freq)
+        # Different from paper, but it uses a different permutation in order to obtain the same calculation
+        emb = torch.cat((freqs, freqs), dim=-1)
+        self.register_buffer("cos_cached", emb.cos().to(dtype), persistent=False)
+        self.register_buffer("sin_cached", emb.sin().to(dtype), persistent=False)
+
+    def forward(self, x, seq_len=None):
+        # x: [bs, num_attention_heads, seq_len, head_size]
+        if seq_len > self.max_seq_len_cached:
+            self._set_cos_sin_cache(seq_len=seq_len, device=x.device, dtype=x.dtype)
+
+        return (
+            self.cos_cached[:seq_len].to(dtype=x.dtype),
+            self.sin_cached[:seq_len].to(dtype=x.dtype),
+        )
+
+
+# Copied from transformers.models.llama.modeling_llama.rotate_half
+def rotate_half(x):
+    """Rotates half the hidden dims of the input."""
+    x1 = x[..., : x.shape[-1] // 2]
+    x2 = x[..., x.shape[-1] // 2 :]
+    return torch.cat((-x2, x1), dim=-1)
+
+
+# Copied from transformers.models.llama.modeling_llama.apply_rotary_pos_emb
+def apply_rotary_pos_emb(q, k, cos, sin, position_ids, unsqueeze_dim=1):
+    """Applies Rotary Position Embedding to the query and key tensors.
+
+    Args:
+        q (`torch.Tensor`): The query tensor.
+        k (`torch.Tensor`): The key tensor.
+        cos (`torch.Tensor`): The cosine part of the rotary embedding.
+        sin (`torch.Tensor`): The sine part of the rotary embedding.
+        position_ids (`torch.Tensor`):
+            The position indices of the tokens corresponding to the query and key tensors. For example, this can be
+            used to pass offsetted position ids when working with a KV-cache.
+        unsqueeze_dim (`int`, *optional*, defaults to 1):
+            The 'unsqueeze_dim' argument specifies the dimension along which to unsqueeze cos[position_ids] and
+            sin[position_ids] so that they can be properly broadcasted to the dimensions of q and k. For example, note
+            that cos[position_ids] and sin[position_ids] have the shape [batch_size, seq_len, head_dim]. Then, if q and
+            k have the shape [batch_size, heads, seq_len, head_dim], then setting unsqueeze_dim=1 makes
+            cos[position_ids] and sin[position_ids] broadcastable to the shapes of q and k. Similarly, if q and k have
+            the shape [batch_size, seq_len, heads, head_dim], then set unsqueeze_dim=2.
+    Returns:
+        `tuple(torch.Tensor)` comprising of the query and key tensors rotated using the Rotary Position Embedding.
+    """
+    cos = cos[position_ids].unsqueeze(unsqueeze_dim)
+    sin = sin[position_ids].unsqueeze(unsqueeze_dim)
+    q_embed = (q * cos) + (rotate_half(q) * sin)
+    k_embed = (k * cos) + (rotate_half(k) * sin)
+    return q_embed, k_embed
+
+
+class MistralMLP(nn.Module):
+    def __init__(self, config):
+        super().__init__()
+        self.config = config
+        self.hidden_size = config.hidden_size
+        self.intermediate_size = config.intermediate_size
+        self.gate_proj = nn.Linear(self.hidden_size, self.intermediate_size, bias=False)
+        self.up_proj = nn.Linear(self.hidden_size, self.intermediate_size, bias=False)
+        self.down_proj = nn.Linear(self.intermediate_size, self.hidden_size, bias=False)
+        self.act_fn = ACT2FN[config.hidden_act]
+
+    def forward(self, x):
+        return self.down_proj(self.act_fn(self.gate_proj(x)) * self.up_proj(x))
+
+
+# Copied from transformers.models.llama.modeling_llama.repeat_kv
+def repeat_kv(hidden_states: torch.Tensor, n_rep: int) -> torch.Tensor:
     """
     This is the equivalent of torch.repeat_interleave(x, dim=1, repeats=n_rep). The hidden states go from (batch,
     num_key_value_heads, seqlen, head_dim) to (batch, num_attention_heads, seqlen, head_dim)
@@ -69,16 +187,16 @@ def repeat_kv_quant(hidden_states: torch.Tensor, n_rep: int) -> torch.Tensor:
     hidden_states = hidden_states[:, :, None, :, :].expand(batch, num_key_value_heads, n_rep, slen, head_dim)
     return hidden_states.reshape(batch, num_key_value_heads * n_rep, slen, head_dim)
 
-class MistralAttention_KIVI(nn.Module):
+
+class MistralAttention(nn.Module):
     """
     Multi-headed attention from 'Attention Is All You Need' paper. Modified to use sliding window attention: Longformer
     and "Generating Long Sequences with Sparse Transformers".
     """
 
-    def __init__(self, config: MistralConfig, layer_idx: int):
+    def __init__(self, config: MistralConfig):
         super().__init__()
         self.config = config
-        self.layer_idx = layer_idx
         self.hidden_size = config.hidden_size
         self.num_heads = config.num_attention_heads
         self.head_dim = self.hidden_size // self.num_heads
@@ -87,36 +205,6 @@ class MistralAttention_KIVI(nn.Module):
         self.max_position_embeddings = config.max_position_embeddings
         self.rope_theta = config.rope_theta
         self.is_causal = True
-        
-        l=config.annotation.split('_')
-        k_q = [int(l[0]),32]
-        v_q = [int(l[1]),32]
-        self.k_bits = 1 if ( layer_idx>=k_q[0] and layer_idx<k_q[1] ) else 2
-        self.v_bits = 1 if ( layer_idx>=v_q[0] and layer_idx<v_q[1] ) else 2
-        # self.gamma = int(l[-1].strip()) * (1/56)
-        # self.gamma = int(l[-1].strip()) * (1/12)
-        # datasets = ['multi_news', 'samsum','2wikimqa','multifieldqa_zh']
-        # self.dataset = datasets[int(l[-1].strip())]
-        self.kq = 1
-        self.vq = 1
-        
-        g1 = [0/6,1/6,2/6,]
-        g2 = [0,0.045,0.09,]
-        
-        # self.gamma = ['na',2/12,2/56,'na']
-        self.gamma = ['na',g1[int(l[-2].strip())],g2[int(l[-1].strip())],'na']
-        
-        k_m = int(l[2])
-        v_m = int(l[3])
-        self.km=False
-        self.vm=False
-        if self.layer_idx >= k_m and self.layer_idx % 2 == 1:
-            self.km=True
-        if self.layer_idx >= v_m and self.layer_idx % 2 == 1:
-            self.vm=True
-        
-        self.group_size = config.group_size
-        self.residual_length = config.residual_length
 
         if (self.head_dim * self.num_heads) != self.hidden_size:
             raise ValueError(
@@ -133,8 +221,7 @@ class MistralAttention_KIVI(nn.Module):
             max_position_embeddings=self.max_position_embeddings,
             base=self.rope_theta,
         )
-        
-        
+
     def _shape(self, tensor: torch.Tensor, seq_len: int, bsz: int):
         return tensor.view(bsz, seq_len, self.num_heads, self.head_dim).transpose(1, 2).contiguous()
 
@@ -164,165 +251,41 @@ class MistralAttention_KIVI(nn.Module):
 
         kv_seq_len = key_states.shape[-2]
         if past_key_value is not None:
-            kv_seq_len += past_key_value[-1]
+            kv_seq_len += past_key_value[0].shape[-2]
         cos, sin = self.rotary_emb(value_states, seq_len=kv_seq_len)
         query_states, key_states = apply_rotary_pos_emb(query_states, key_states, cos, sin, position_ids)
 
         if past_key_value is not None:
-            key_states_quant_trans = past_key_value[0]
-            key_states_full = past_key_value[1]
-            key_scale_trans = past_key_value[2]
-            key_mn_trans = past_key_value[3]
-            value_states_quant = past_key_value[4]
-            value_states_full = past_key_value[5]
-            value_scale = past_key_value[6]
-            value_mn = past_key_value[7]
+            # reuse k, v, self_attention
+            key_states = torch.cat([past_key_value[0], key_states], dim=2)
+            value_states = torch.cat([past_key_value[1], value_states], dim=2)
 
-            if key_states_quant_trans is not None:
-                # import ipdb; ipdb.set_trace()
-                key_states_quant_trans_repeat = repeat_kv_quant(key_states_quant_trans, self.num_key_value_groups)
-                key_scale_trans_repeat = repeat_kv_quant(key_scale_trans, self.num_key_value_groups)
-                key_mn_trans_repeat = repeat_kv_quant(key_mn_trans, self.num_key_value_groups)
-                att_qkquant = cuda_bmm_fA_qB_outer(self.group_size, query_states, key_states_quant_trans_repeat, 
-                                key_scale_trans_repeat, key_mn_trans_repeat, self.k_bits) # key_states_quant_trans, key_scale_trans, key_mn_trans need to be repeated
-            else:
-                att_qkquant = None
+        past_key_value = (key_states, value_states) if use_cache else None
 
-            if key_states_full is not None:
-                key_states_full = torch.cat([key_states_full, key_states], dim=2)
-            else:
-                key_states_full = key_states
-            
-            key_states_full_repeat = repeat_kv(key_states_full, self.num_key_value_groups)
-            att_qkfull = torch.matmul(query_states, key_states_full_repeat.transpose(2, 3)) # key_states_full need to be repeated
-            if att_qkquant is not None:
-                attn_weights = torch.cat([att_qkquant, att_qkfull], dim=-1) / math.sqrt(self.head_dim)
-            else:
-                attn_weights = att_qkfull / math.sqrt(self.head_dim)
+        # repeat k/v heads if n_kv_heads < n_heads
+        key_states = repeat_kv(key_states, self.num_key_value_groups)
+        value_states = repeat_kv(value_states, self.num_key_value_groups)
 
-            if key_states_full.shape[-2] == self.residual_length:
-                key_states_quant_trans_new, key_scale_trans_new, key_mn_trans_new = triton_quantize_and_pack_along_last_dim(key_states_full.transpose(2, 3).contiguous(), 
-                                                                                                                            self.group_size, 
-                                                                                                                            self.k_bits)
-                key_states_full = None
-                if key_states_quant_trans is not None:
-                    key_states_quant_trans = torch.cat([key_states_quant_trans, key_states_quant_trans_new], dim=3)
-                    key_scale_trans = torch.cat([key_scale_trans, key_scale_trans_new], dim=3)
-                    key_mn_trans = torch.cat([key_mn_trans, key_mn_trans_new], dim=3)
-                else:
-                    key_states_quant_trans = key_states_quant_trans_new
-                    key_scale_trans = key_scale_trans_new
-                    key_mn_trans = key_mn_trans_new
+        attn_weights = torch.matmul(query_states, key_states.transpose(2, 3)) / math.sqrt(self.head_dim)
 
-            if attn_weights.size() != (bsz, self.num_heads, q_len, kv_seq_len):
+        if attn_weights.size() != (bsz, self.num_heads, q_len, kv_seq_len):
+            raise ValueError(
+                f"Attention weights should be of size {(bsz, self.num_heads, q_len, kv_seq_len)}, but is"
+                f" {attn_weights.size()}"
+            )
+
+        if attention_mask is not None:
+            if attention_mask.size() != (bsz, 1, q_len, kv_seq_len):
                 raise ValueError(
-                    f"Attention weights should be of size {(bsz, self.num_heads, q_len, kv_seq_len)}, but is"
-                    f" {attn_weights.size()}"
+                    f"Attention mask should be of size {(bsz, 1, q_len, kv_seq_len)}, but is {attention_mask.size()}"
                 )
 
-            if attention_mask is not None:
-                if attention_mask.size() != (bsz, 1, q_len, kv_seq_len):
-                    raise ValueError(
-                        f"Attention mask should be of size {(bsz, 1, q_len, kv_seq_len)}, but is {attention_mask.size()}"
-                    )
-                attn_weights = attn_weights + attention_mask
-                attn_weights = torch.max(
-                    attn_weights, torch.tensor(torch.finfo(attn_weights.dtype).min)
-                )
+            attn_weights = attn_weights + attention_mask
 
-            # upcast attention to fp32
-            attn_weights = nn.functional.softmax(attn_weights, dim=-1, dtype=torch.float32).to(query_states.dtype)
+        # upcast attention to fp32
+        attn_weights = nn.functional.softmax(attn_weights, dim=-1, dtype=torch.float32).to(query_states.dtype)
+        attn_output = torch.matmul(attn_weights, value_states)
 
-            value_states_full = torch.cat([value_states_full, value_states], dim=2)
-            value_full_length = value_states_full.shape[-2]
-            if value_states_quant is None:
-                value_states_full_repeat = repeat_kv(value_states_full, self.num_key_value_groups)
-                attn_output = torch.matmul(attn_weights, value_states_full_repeat) # value_states_full need to be repeated
-            else:
-                value_states_quant_repeat = repeat_kv_quant(value_states_quant, self.num_key_value_groups)
-                value_scale_repeat = repeat_kv_quant(value_scale, self.num_key_value_groups)
-                value_mn_repeat = repeat_kv_quant(value_mn, self.num_key_value_groups)
-                attn_output = cuda_bmm_fA_qB_outer(self.group_size, attn_weights[:, :, :, :-value_full_length], value_states_quant_repeat, 
-                                                value_scale_repeat, value_mn_repeat, self.v_bits) # value_states_quant, value_scale, value_mn need to be repeated
-                
-                value_states_full_repeat = repeat_kv(value_states_full, self.num_key_value_groups)
-                attn_output += torch.matmul(attn_weights[:, :, :, -value_full_length:], value_states_full_repeat) # value_states_full need to be repeated
-
-            if value_states_full.shape[-2] > self.residual_length:
-                assert value_states_full.shape[-2] == self.residual_length + 1
-                value_states_quant_new, scale, mn = triton_quantize_and_pack_along_last_dim(value_states_full[:, :, :1, :].contiguous(), 
-                                                                                                self.group_size, 
-                                                                                                self.v_bits)
-                value_states_full = value_states_full[:, :, 1:, :].contiguous()
-                if value_states_quant is not None:
-                    value_states_quant = torch.cat([value_states_quant, value_states_quant_new], dim=2)
-                    value_scale = torch.cat([value_scale, scale], dim=2)
-                    value_mn = torch.cat([value_mn, mn], dim=2)
-                else:
-                    value_states_quant = value_states_quant_new
-                    value_scale = scale
-                    value_mn = mn
-        
-        else:
-
-            # quantize
-            if key_states.shape[-2] % self.residual_length != 0:
-                if key_states.shape[-2] < self.residual_length:
-                    key_states_quant = None
-                    key_states_full = key_states
-                else:
-                    key_states_quant = key_states[:, :, :-(key_states.shape[-2] % self.residual_length), :].contiguous()
-                    key_states_full = key_states[:, :, -(key_states.shape[-2] % self.residual_length):, :].contiguous()
-            else:
-                key_states_quant = key_states
-                key_states_full = None
-            if key_states_quant is not None:
-                key_states_quant_trans, key_scale_trans, key_mn_trans = triton_quantize_and_pack_along_last_dim(
-                    key_states_quant.transpose(2, 3).contiguous(), self.group_size, self.k_bits)
-            else:
-                key_states_quant_trans = None
-                key_scale_trans = None
-                key_mn_trans = None
-            
-            if value_states.shape[-2] <= self.residual_length:
-                value_states_quant = None
-                value_states_full = value_states
-                value_scale = None
-                value_mn = None
-            else:
-                value_states_quant = value_states[:, :, :-self.residual_length, :].contiguous()
-                value_states_full = value_states[:, :, -self.residual_length:, :].contiguous()
-                value_states_quant, value_scale, value_mn = triton_quantize_and_pack_along_last_dim(
-                    value_states_quant, self.group_size, self.v_bits)
-        
-            key_states = repeat_kv(key_states, self.num_key_value_groups)
-            value_states = repeat_kv(value_states, self.num_key_value_groups)
-            attn_weights = torch.matmul(query_states, 
-                                        key_states.transpose(2, 3)) / math.sqrt(self.head_dim)
-
-            if attn_weights.size() != (bsz, self.num_heads, q_len, kv_seq_len):
-                raise ValueError(
-                    f"Attention weights should be of size {(bsz, self.num_heads, q_len, kv_seq_len)}, but is"
-                    f" {attn_weights.size()}"
-                )
-
-            if attention_mask is not None:
-                if attention_mask.size() != (bsz, 1, q_len, kv_seq_len):
-                    raise ValueError(
-                        f"Attention mask should be of size {(bsz, 1, q_len, kv_seq_len)}, but is {attention_mask.size()}"
-                    )
-                attn_weights = attn_weights + attention_mask
-                attn_weights = torch.max(
-                    attn_weights, torch.tensor(torch.finfo(attn_weights.dtype).min)
-                )
-
-            # upcast attention to fp32
-            attn_weights = nn.functional.softmax(
-                attn_weights, dim=-1, dtype=torch.float32
-            ).to(query_states.dtype)
-
-            attn_output = torch.matmul(attn_weights, value_states) 
-        past_key_value = (key_states_quant_trans, key_states_full, key_scale_trans, key_mn_trans, value_states_quant, value_states_full, value_scale, value_mn, kv_seq_len) if use_cache else None
         if attn_output.size() != (bsz, self.num_heads, q_len, self.head_dim):
             raise ValueError(
                 f"`attn_output` should be of size {(bsz, self.num_heads, q_len, self.head_dim)}, but is"
@@ -340,7 +303,7 @@ class MistralAttention_KIVI(nn.Module):
         return attn_output, attn_weights, past_key_value
 
 
-class MistralFlashAttention_KIVI(MistralAttention_KIVI):
+class MistralFlashAttention2(MistralAttention):
     """
     Mistral flash attention module. This module inherits from `MistralAttention` as the weights of the module stays
     untouched. The only required change would be on the forward pass where it needs to correctly call the public API of
@@ -376,8 +339,7 @@ class MistralFlashAttention_KIVI(MistralAttention_KIVI):
 
         kv_seq_len = key_states.shape[-2]
         if past_key_value is not None:
-        #     kv_seq_len += past_key_value[-1]
-            kv_seq_len += past_key_value[self.layer_idx][-1]
+            kv_seq_len += past_key_value[0].shape[-2]
 
         # Because the input can be padded, the absolute sequence length depends on the max position id.
         rotary_seq_len = max(kv_seq_len, position_ids[:, -1].max().item()) + 1
@@ -385,285 +347,96 @@ class MistralFlashAttention_KIVI(MistralAttention_KIVI):
 
         query_states, key_states = apply_rotary_pos_emb(query_states, key_states, cos, sin, position_ids)
 
-        # use_sliding_windows = (
-        #     _flash_supports_window_size
-        #     and hasattr(self.config, "sliding_window") is not None
-        #     and kv_seq_len > self.config.sliding_window
-        # )
+        use_sliding_windows = (
+            _flash_supports_window_size
+            and hasattr(self.config, "sliding_window") is not None
+            and kv_seq_len > self.config.sliding_window
+        )
 
-        # if not _flash_supports_window_size:
-        #     logger.warning_once(
-        #         "The current flash attention version does not support sliding window attention, for a more memory efficient implementation"
-        #         " make sure to upgrade flash-attn library."
-        #     )
-        if past_key_value is not None:
-            # INFO: decoding
-            
-            # if self.layer_idx==31:
-            #     dei.debug(past_key_value[0])
-            #     dei.debug(past_key_value[30])
-            # key_states_quant_trans = past_key_value[0]
-            # key_states_full = past_key_value[1]
-            # key_scale_trans = past_key_value[2]
-            # key_mn_trans = past_key_value[3]
-            # value_states_quant = past_key_value[4]
-            # value_states_full = past_key_value[5]
-            # value_scale = past_key_value[6]
-            # value_mn = past_key_value[7]
-            key_states_full = past_key_value[self.layer_idx][1]
-            key_scale_trans = past_key_value[self.layer_idx][2]
-            key_mn_trans = past_key_value[self.layer_idx][3]
-            value_states_full = past_key_value[self.layer_idx][5]
-            value_scale = past_key_value[self.layer_idx][6]
-            value_mn = past_key_value[self.layer_idx][7]
-            if self.km:
-                key_states_quant_trans = past_key_value[self.layer_idx-1][0][:,:,:, :self.k_bits*key_mn_trans.shape[-1] ]
-            else:
-                key_states_quant_trans = past_key_value[self.layer_idx][0]
-            if self.vm:
-                value_states_quant = past_key_value[self.layer_idx-1][4][:,:, :value_mn.shape[-2] ,:]
-            else:
-                value_states_quant = past_key_value[self.layer_idx][4]
-            
-
-            # import ipdb; ipdb.set_trace()
-
-            if key_states_quant_trans is not None:
-                key_states_quant_trans_repeat = repeat_kv_quant(key_states_quant_trans, self.num_key_value_groups)
-                key_scale_trans_repeat = repeat_kv_quant(key_scale_trans, self.num_key_value_groups)
-                key_mn_trans_repeat = repeat_kv_quant(key_mn_trans, self.num_key_value_groups)
-                if self.k_bits == 1:
-                    att_qkquant = triton_bmm_fA_qB_outer(self.group_size, query_states, key_states_quant_trans_repeat, 
-                                key_scale_trans_repeat, key_mn_trans_repeat, self.k_bits) # key_states_quant_trans, key_scale_trans, key_mn_trans need to be repeated
-                else:
-                    att_qkquant = cuda_bmm_fA_qB_outer(self.group_size, query_states, key_states_quant_trans_repeat, 
-                                key_scale_trans_repeat, key_mn_trans_repeat, self.k_bits) # key_states_quant_trans, key_scale_trans, key_mn_trans need to be repeated
-                
-            else:
-                att_qkquant = None
-            if key_states_full is not None:
-                key_states_full = torch.cat([key_states_full, key_states], dim=2)
-            else:
-                key_states_full = key_states
-
-            key_states_full_repeat = repeat_kv(key_states_full, self.num_key_value_groups)
-            att_qkfull = torch.matmul(query_states, key_states_full_repeat.transpose(2, 3))
-
-            if att_qkquant is not None:
-                attn_weights = torch.cat([att_qkquant, att_qkfull], dim=-1) / math.sqrt(self.head_dim)
-            else:
-                attn_weights = att_qkfull / math.sqrt(self.head_dim)
-
-            if key_states_full.shape[-2] == self.residual_length:
-                assert self.residual_length % self.group_size == 0
-                anno=0
-                if self.km == True:
-                    anno=1
-                else:
-                    if self.kq==2:
-                        anno=2
-                key_states_quant_trans_new, key_scale_trans_new, key_mn_trans_new = triton_quantize_and_pack_along_last_dim(key_states_full.transpose(2, 3).contiguous(), 
-                                                                                                                            self.group_size, 
-                                                                                                                            self.k_bits,
-                                                                                                                            anno,
-                                                                                                                            )
-                # TODO: Cali_K New
-                if self.kq==1:
-                    key_mn_trans_new += (key_scale_trans_new*self.gamma[self.k_bits])
-                    key_scale_trans_new *= (1 - 2*self.gamma[self.k_bits])
-
-                
-                key_states_full = None
-                if self.km:
-                    if key_scale_trans is not None:
-                        key_scale_trans = torch.cat([key_scale_trans, key_scale_trans_new], dim=3)
-                        key_mn_trans = torch.cat([key_mn_trans, key_mn_trans_new], dim=3)
-                    else:
-                        key_scale_trans = key_scale_trans_new
-                        key_mn_trans = key_mn_trans_new
-                
-                elif key_states_quant_trans is not None:
-                    key_states_quant_trans = torch.cat([key_states_quant_trans, key_states_quant_trans_new], dim=3)
-                    key_scale_trans = torch.cat([key_scale_trans, key_scale_trans_new], dim=3)
-                    key_mn_trans = torch.cat([key_mn_trans, key_mn_trans_new], dim=3)
-                else:
-                    key_states_quant_trans = key_states_quant_trans_new
-                    key_scale_trans = key_scale_trans_new
-                    key_mn_trans = key_mn_trans_new
-
-            if attn_weights.size() != (bsz, self.num_heads, q_len, kv_seq_len):
-                raise ValueError(
-                    f"Attention weights should be of size {(bsz, self.num_heads, q_len, kv_seq_len)}, but is"
-                    f" {attn_weights.size()}"
-                )
-
-            if attention_mask is not None:
-                if attention_mask.size() != (bsz, 1, q_len, kv_seq_len):
-                    raise ValueError(
-                        f"Attention mask should be of size {(bsz, 1, q_len, kv_seq_len)}, but is {attention_mask.size()}"
-                    )
-                attn_weights = attn_weights + attention_mask
-                attn_weights = torch.max(
-                    attn_weights, torch.tensor(torch.finfo(attn_weights.dtype).min)
-                )
-
-            # upcast attention to fp32
-            attn_weights = nn.functional.softmax(attn_weights, dim=-1, dtype=torch.float32).to(query_states.dtype)
-
-            value_states_full = torch.cat([value_states_full, value_states], dim=2)
-            value_full_length = value_states_full.shape[-2]
-            if value_states_quant is None:
-                value_states_full_repeat = repeat_kv(value_states_full, self.num_key_value_groups)
-                attn_output = torch.matmul(attn_weights, value_states_full_repeat)
-            else:
-                value_states_quant_repeat = repeat_kv_quant(value_states_quant, self.num_key_value_groups)
-                value_scale_repeat = repeat_kv_quant(value_scale, self.num_key_value_groups)
-                value_mn_repeat = repeat_kv_quant(value_mn, self.num_key_value_groups)
-                if self.v_bits == 1:
-                    attn_output = triton_bmm_fA_qB_outer(self.group_size, attn_weights[:, :, :, :-value_full_length], value_states_quant_repeat, 
-                                                value_scale_repeat, value_mn_repeat, self.v_bits) # value_states_quant, value_scale, value_mn need to be repeated
-                else:
-                    attn_output = cuda_bmm_fA_qB_outer(self.group_size, attn_weights[:, :, :, :-value_full_length], value_states_quant_repeat, 
-                                                value_scale_repeat, value_mn_repeat, self.v_bits) # value_states_quant, value_scale, value_mn need to be repeated
-                value_states_full_repeat = repeat_kv(value_states_full, self.num_key_value_groups)
-                attn_output += torch.matmul(attn_weights[:, :, :, -value_full_length:], value_states_full_repeat) # value_states_full need to be repeated
-
-            attn_output = attn_output.transpose(1, 2).contiguous()
-
-            if value_full_length > self.residual_length:
-                assert value_full_length == self.residual_length + 1
-                anno=0
-                if self.vm == True:
-                    anno=1
-                else:
-                    if self.vq==2:
-                        anno=2
-                value_states_quant_new, scale, mn = triton_quantize_and_pack_along_last_dim(value_states_full[:, :, :1, :].contiguous(), 
-                                                                                                self.group_size, 
-                                                                                                self.v_bits,
-                                                                                                anno,
-                                                                                                )
-                # TODO: Cali_V New
-                if self.vq==1:
-                    mn += (scale*self.gamma[self.v_bits])
-                    scale *= (1 - 2*self.gamma[self.v_bits])
-                # if self.v_bits==1:
-                # if self.v_bits==2 and self.vq==1:
-                #     mn += (scale*self.gamma)
-                #     scale *= (1 - 2*self.gamma)
-                # mn += (scale*self.gamma)
-                # scale *= (1 - 2*self.gamma)
-                
-                value_states_full = value_states_full[:, :, 1:, :].contiguous()
-                if self.vm == True:
-                    if value_scale is not None:
-                        value_scale = torch.cat([value_scale, scale], dim=2)
-                        value_mn = torch.cat([value_mn, mn], dim=2)
-                    else:
-                        value_scale = scale
-                        value_mn = mn
-                elif value_states_quant is not None:
-                    value_states_quant = torch.cat([value_states_quant, value_states_quant_new], dim=2)
-                    value_scale = torch.cat([value_scale, scale], dim=2)
-                    value_mn = torch.cat([value_mn, mn], dim=2)
-                else:
-                    value_states_quant = value_states_quant_new
-                    value_scale = scale
-                    value_mn = mn
-
-
-        else:
-            # INFO: prefill
-
-            key_states_repeat = repeat_kv(key_states, self.num_key_value_groups)
-            value_states_repeat = repeat_kv(value_states, self.num_key_value_groups)
-
-            input_dtype = query_states.dtype
-            if input_dtype == torch.float32:
-                # Handle the case where the model is quantized
-                if hasattr(self.config, "_pre_quantization_dtype"):
-                    target_dtype = self.config._pre_quantization_dtype
-                else:
-                    target_dtype = self.q_proj.weight.dtype
-
-                logger.warning_once(
-                    f"The input hidden states seems to be silently casted in float32, this might be related to"
-                    f" the fact you have upcasted embedding or layer norm layers in float32. We will cast back the input in"
-                    f" {target_dtype}."
-                )
-
-                query_states = query_states.to(target_dtype)
-                key_states_repeat = key_states_repeat.to(target_dtype)
-                value_states_repeat = value_states_repeat.to(target_dtype)
-            attn_output = self._flash_attention_forward(
-                query_states.transpose(1, 2), key_states_repeat.transpose(1, 2), 
-                value_states_repeat.transpose(1, 2), None, q_len, dropout=0.0
+        if not _flash_supports_window_size:
+            logger.warning_once(
+                "The current flash attention version does not support sliding window attention, for a more memory efficient implementation"
+                " make sure to upgrade flash-attn library."
             )
-            # INFO: quantize
-            if key_states.shape[-2] % self.residual_length != 0:
-                if key_states.shape[-2] < self.residual_length:
-                    key_states_quant = None
-                    key_states_full = key_states
-                else:
-                    key_states_quant = key_states[:, :, :-(key_states.shape[-2] % self.residual_length), :].contiguous()
-                    key_states_full = key_states[:, :, -(key_states.shape[-2] % self.residual_length):, :].contiguous()
-            else:
-                key_states_quant = key_states
-                key_states_full = None
-            if key_states_quant is not None:
-                anno=0
-                if self.km == True:
-                    anno=1
-                else:
-                    if self.kq==2:
-                        anno=2
-                key_states_quant_trans, key_scale_trans, key_mn_trans = triton_quantize_and_pack_along_last_dim(
-                    key_states_quant.transpose(2, 3).contiguous(), self.group_size, self.k_bits, 
-                    anno,
+
+        if past_key_value is not None:
+            # Activate slicing cache only if the config has a value `sliding_windows` attribute
+            if hasattr(self.config, "sliding_window") and kv_seq_len > self.config.sliding_window:
+                slicing_tokens = kv_seq_len - self.config.sliding_window
+
+                past_key = past_key_value[0]
+                past_value = past_key_value[1]
+
+                past_key = past_key[:, :, slicing_tokens:, :].contiguous()
+                past_value = past_value[:, :, slicing_tokens:, :].contiguous()
+
+                if past_key.shape[-2] != self.config.sliding_window - 1:
+                    raise ValueError(
+                        f"past key much have a shape of (`batch_size, num_heads, self.config.sliding_window-1, head_dim`), got"
+                        f" {past_key.shape}"
                     )
-                # TODO: Cali_K
-                if self.kq == 1:
-                    key_mn_trans += (key_scale_trans*self.gamma[self.k_bits])
-                    key_scale_trans *= (1 - 2*self.gamma[self.k_bits])
-                
+
+                past_key_value = (past_key, past_value)
+
+                if attention_mask is not None:
+                    attention_mask = attention_mask[:, slicing_tokens:]
+                    attention_mask = torch.cat([attention_mask, torch.ones_like(attention_mask[:, -1:])], dim=-1)
+
+            key_states = torch.cat([past_key_value[0], key_states], dim=2)
+            value_states = torch.cat([past_key_value[1], value_states], dim=2)
+
+        past_key_value = (key_states, value_states) if use_cache else None
+
+        # repeat k/v heads if n_kv_heads < n_heads
+        key_states = repeat_kv(key_states, self.num_key_value_groups)
+        value_states = repeat_kv(value_states, self.num_key_value_groups)
+
+        # TODO: Mistral does not have dropout in the config??
+        # It is recommended to use dropout with FA according to the docs
+        # when training.
+        dropout_rate = 0.0  # if not self.training else self.attn_dropout
+
+        # In PEFT, usually we cast the layer norms in float32 for training stability reasons
+        # therefore the input hidden states gets silently casted in float32. Hence, we need
+        # cast them back in float16 just to be sure everything works as expected.
+        input_dtype = query_states.dtype
+        if input_dtype == torch.float32:
+            # Handle the case where the model is quantized
+            if hasattr(self.config, "_pre_quantization_dtype"):
+                target_dtype = self.config._pre_quantization_dtype
             else:
-                key_states_quant_trans = None
-                key_scale_trans = None
-                key_mn_trans = None
-            
-            if value_states.shape[-2] <= self.residual_length:
-                value_states_quant = None
-                value_states_full = value_states
-                value_scale = None
-                value_mn = None
-            else:
-                value_states_quant = value_states[:, :, :-self.residual_length, :].contiguous()
-                value_states_full = value_states[:, :, -self.residual_length:, :].contiguous()
-                anno=0
-                if self.vm == True:
-                    anno=1
-                else:
-                    if self.vq==2:
-                        anno=2
-                
-                value_states_quant, value_scale, value_mn = triton_quantize_and_pack_along_last_dim(
-                    value_states_quant, self.group_size, self.v_bits,
-                    anno,
-                    )
-                # TODO: Cali_V
-                if self.vq == 1:
-                    value_mn += (value_scale*self.gamma[self.v_bits])
-                    value_scale *= (1 - 2*self.gamma[self.v_bits])
-                
-        past_key_value = (
-            key_states_quant_trans, key_states_full, key_scale_trans, key_mn_trans,
-            value_states_quant, value_states_full, value_scale, value_mn, kv_seq_len
-            ) if use_cache else None
+                target_dtype = self.q_proj.weight.dtype
+
+            logger.warning_once(
+                f"The input hidden states seems to be silently casted in float32, this might be related to"
+                f" the fact you have upcasted embedding or layer norm layers in float32. We will cast back the input in"
+                f" {target_dtype}."
+            )
+
+            query_states = query_states.to(target_dtype)
+            key_states = key_states.to(target_dtype)
+            value_states = value_states.to(target_dtype)
+
+        # Reashape to the expected shape for Flash Attention
+        query_states = query_states.transpose(1, 2)
+        key_states = key_states.transpose(1, 2)
+        value_states = value_states.transpose(1, 2)
+
+        attn_output = self._flash_attention_forward(
+            query_states,
+            key_states,
+            value_states,
+            attention_mask,
+            q_len,
+            dropout=dropout_rate,
+            use_sliding_windows=use_sliding_windows,
+        )
+
         attn_output = attn_output.reshape(bsz, q_len, self.hidden_size).contiguous()
         attn_output = self.o_proj(attn_output)
 
-        # if not output_attentions:
-        attn_weights = None
+        if not output_attentions:
+            attn_weights = None
 
         return attn_output, attn_weights, past_key_value
 
@@ -804,20 +577,19 @@ class MistralFlashAttention_KIVI(MistralAttention_KIVI):
         )
 
 
-class MistralDecoderLayer_KIVI(nn.Module):
-    def __init__(self, config: MistralConfig, layer_idx: int):
+class MistralDecoderLayer(nn.Module):
+    def __init__(self, config: MistralConfig):
         super().__init__()
         self.hidden_size = config.hidden_size
         self.self_attn = (
-            MistralAttention_KIVI(config, layer_idx)
-            if not getattr(config, "use_flash", False)
-            else MistralFlashAttention_KIVI(config, layer_idx)
+            MistralAttention(config=config)
+            if not getattr(config, "_flash_attn_2_enabled", False)
+            else MistralFlashAttention2(config)
         )
         self.mlp = MistralMLP(config)
         self.input_layernorm = MistralRMSNorm(config.hidden_size, eps=config.rms_norm_eps)
         self.post_attention_layernorm = MistralRMSNorm(config.hidden_size, eps=config.rms_norm_eps)
-        self.layer_idx = layer_idx
-        
+
     def forward(
         self,
         hidden_states: torch.Tensor,
@@ -878,11 +650,116 @@ class MistralDecoderLayer_KIVI(nn.Module):
         return outputs
 
 
+MISTRAL_START_DOCSTRING = r"""
+    This model inherits from [`PreTrainedModel`]. Check the superclass documentation for the generic methods the
+    library implements for all its model (such as downloading or saving, resizing the input embeddings, pruning heads
+    etc.)
+
+    This model is also a PyTorch [torch.nn.Module](https://pytorch.org/docs/stable/nn.html#torch.nn.Module) subclass.
+    Use it as a regular PyTorch Module and refer to the PyTorch documentation for all matter related to general usage
+    and behavior.
+
+    Parameters:
+        config ([`MistralConfig`]):
+            Model configuration class with all the parameters of the model. Initializing with a config file does not
+            load the weights associated with the model, only the configuration. Check out the
+            [`~PreTrainedModel.from_pretrained`] method to load the model weights.
+"""
+
+
 @add_start_docstrings(
     "The bare Mistral Model outputting raw hidden-states without any specific head on top.",
     MISTRAL_START_DOCSTRING,
 )
-class MistralModel_KIVI(MistralPreTrainedModel):
+class MistralPreTrainedModel(PreTrainedModel):
+    config_class = MistralConfig
+    base_model_prefix = "model"
+    supports_gradient_checkpointing = True
+    _no_split_modules = ["MistralDecoderLayer"]
+    _skip_keys_device_placement = "past_key_values"
+    _supports_flash_attn_2 = True
+
+    def _init_weights(self, module):
+        std = self.config.initializer_range
+        if isinstance(module, nn.Linear):
+            module.weight.data.normal_(mean=0.0, std=std)
+            if module.bias is not None:
+                module.bias.data.zero_()
+        elif isinstance(module, nn.Embedding):
+            module.weight.data.normal_(mean=0.0, std=std)
+            if module.padding_idx is not None:
+                module.weight.data[module.padding_idx].zero_()
+
+
+MISTRAL_INPUTS_DOCSTRING = r"""
+    Args:
+        input_ids (`torch.LongTensor` of shape `(batch_size, sequence_length)`):
+            Indices of input sequence tokens in the vocabulary. Padding will be ignored by default should you provide
+            it.
+
+            Indices can be obtained using [`AutoTokenizer`]. See [`PreTrainedTokenizer.encode`] and
+            [`PreTrainedTokenizer.__call__`] for details.
+
+            [What are input IDs?](../glossary#input-ids)
+        attention_mask (`torch.Tensor` of shape `(batch_size, sequence_length)`, *optional*):
+            Mask to avoid performing attention on padding token indices. Mask values selected in `[0, 1]`:
+
+            - 1 for tokens that are **not masked**,
+            - 0 for tokens that are **masked**.
+
+            [What are attention masks?](../glossary#attention-mask)
+
+            Indices can be obtained using [`AutoTokenizer`]. See [`PreTrainedTokenizer.encode`] and
+            [`PreTrainedTokenizer.__call__`] for details.
+
+            If `past_key_values` is used, optionally only the last `decoder_input_ids` have to be input (see
+            `past_key_values`).
+
+            If you want to change padding behavior, you should read [`modeling_opt._prepare_decoder_attention_mask`]
+            and modify to your needs. See diagram 1 in [the paper](https://arxiv.org/abs/1910.13461) for more
+            information on the default strategy.
+
+            - 1 indicates the head is **not masked**,
+            - 0 indicates the head is **masked**.
+        position_ids (`torch.LongTensor` of shape `(batch_size, sequence_length)`, *optional*):
+            Indices of positions of each input sequence tokens in the position embeddings. Selected in the range `[0,
+            config.n_positions - 1]`.
+
+            [What are position IDs?](../glossary#position-ids)
+        past_key_values (`tuple(tuple(torch.FloatTensor))`, *optional*, returned when `use_cache=True` is passed or when `config.use_cache=True`):
+            Tuple of `tuple(torch.FloatTensor)` of length `config.n_layers`, with each tuple having 2 tensors of shape
+            `(batch_size, num_heads, sequence_length, embed_size_per_head)`) and 2 additional tensors of shape
+            `(batch_size, num_heads, encoder_sequence_length, embed_size_per_head)`.
+
+            Contains pre-computed hidden-states (key and values in the self-attention blocks and in the cross-attention
+            blocks) that can be used (see `past_key_values` input) to speed up sequential decoding.
+
+            If `past_key_values` are used, the user can optionally input only the last `decoder_input_ids` (those that
+            don't have their past key value states given to this model) of shape `(batch_size, 1)` instead of all
+            `decoder_input_ids` of shape `(batch_size, sequence_length)`.
+        inputs_embeds (`torch.FloatTensor` of shape `(batch_size, sequence_length, hidden_size)`, *optional*):
+            Optionally, instead of passing `input_ids` you can choose to directly pass an embedded representation. This
+            is useful if you want more control over how to convert `input_ids` indices into associated vectors than the
+            model's internal embedding lookup matrix.
+        use_cache (`bool`, *optional*):
+            If set to `True`, `past_key_values` key value states are returned and can be used to speed up decoding (see
+            `past_key_values`).
+        output_attentions (`bool`, *optional*):
+            Whether or not to return the attentions tensors of all attention layers. See `attentions` under returned
+            tensors for more detail.
+        output_hidden_states (`bool`, *optional*):
+            Whether or not to return the hidden states of all layers. See `hidden_states` under returned tensors for
+            more detail.
+        return_dict (`bool`, *optional*):
+            Whether or not to return a [`~utils.ModelOutput`] instead of a plain tuple.
+"""
+
+
+@add_start_docstrings(
+    "The bare Mistral Model outputting raw hidden-states without any specific head on top.",
+    MISTRAL_START_DOCSTRING,
+)
+class MistralModel(MistralPreTrainedModel):
     """
     Transformer decoder consisting of *config.num_hidden_layers* layers. Each layer is a [`MistralDecoderLayer`]
 
@@ -896,31 +773,13 @@ class MistralModel_KIVI(MistralPreTrainedModel):
         self.vocab_size = config.vocab_size
 
         self.embed_tokens = nn.Embedding(config.vocab_size, config.hidden_size, self.padding_idx)
-        self.layers = nn.ModuleList([MistralDecoderLayer_KIVI(config,idx) for idx in range(config.num_hidden_layers)])
+        self.layers = nn.ModuleList([MistralDecoderLayer(config) for _ in range(config.num_hidden_layers)])
         self.norm = MistralRMSNorm(config.hidden_size, eps=config.rms_norm_eps)
 
         self.gradient_checkpointing = False
         # Initialize weights and apply final processing
         self.post_init()
-        self.k_bits = config.k_bits
-        self.v_bits = config.v_bits
-        
-        # INFO: count
-        self.cnt=-1
-        self.idx=-1
-        # ADDED: debugging
-        l = config.annotation.split('_')
-        self.k = [int(l[2]),32]
-        self.v = [int(l[3]),32]
-        self.mode = l[-1]
-        self.kq = [int(l[0]),32]
-        self.vq = [int(l[1]),32]
-    
-    def moding(self, n:int = None):
-        if n is None:
-            return int(self.mode)
-        return bool(int(self.mode)==n)
-        
+
     def get_input_embeddings(self):
         return self.embed_tokens
 
@@ -958,86 +817,11 @@ class MistralModel_KIVI(MistralPreTrainedModel):
         else:
             raise ValueError("You have to specify either decoder_input_ids or decoder_inputs_embeds")
 
-        # INFO: count
-        if seq_length !=1: # prefill
-            self.cnt=0
-            self.idx+=1
-        else: # decode
-            self.cnt+=1
-        # if self.idx==2:
-        #     exit(0)
-        # print(f'\n###\n{self.idx}, {self.cnt}, {seq_length}\n###\n')
-        torch.cuda.empty_cache()
-        
-        # INFO: MERGE!
-        # if past_key_values is not None and self.cnt==1 and (self.k[0]!=self.k[1] or self.v[0]!=self.v[1]):
-        #     if self.k[0]==self.k[1]:
-        #         all_id_l=min(self.v)
-        #         all_id_u=max(self.v)
-        #     elif self.v[0]==self.v[1]:
-        #         all_id_l=min(self.k)
-        #         all_id_u=max(self.k)
-        #     else:
-        #         all_id_l=min(self.v+self.k)
-        #         all_id_u=max(self.v+self.k)
-        #     tl = past_key_values[:all_id_l]
-        #     tm = ()
-        #     tu = past_key_values[all_id_u:]
-        #     for i in range((all_id_u-all_id_l)//2):
-        #         id_l = all_id_l+2*i
-        #         id_u = all_id_l+2*i+1
-        #         flag_k = bool(id_l>=self.k[0] and id_u<=self.k[1])
-        #         flag_v = bool(id_l>=self.v[0] and id_u<=self.v[1])
-        #         # print(self.mode, id_l, id_u,flag_k, flag_v)
-        #         if flag_k:
-        #             k_l=k_u=past_key_values[id_l][0]
-        #         if flag_v:
-        #             v_l=v_u=past_key_values[id_l][4]
-        #         if flag_k and flag_v:
-        #             tm+=(((k_l,)+past_key_values[id_l][1:4]+(v_l,)+past_key_values[id_l][5:]),)
-        #             tm+=(((k_u,)+past_key_values[id_u][1:4]+(v_u,)+past_key_values[id_u][5:]),)
-        #         elif flag_k:
-        #             tm+=(((k_l,)+past_key_values[id_l][1:]),)
-        #             tm+=(((k_u,)+past_key_values[id_u][1:]),)
-        #         elif flag_v:
-        #             tm+=((past_key_values[id_l][:4]+(v_l,)+past_key_values[id_l][5:]),)
-        #             tm+=((past_key_values[id_u][:4]+(v_u,)+past_key_values[id_u][5:]),)
-        #     past_key_values = tl+tm+tu
-        
-        # INFO: CALI!
-        # if past_key_values is not None and self.cnt==1 and self.moding(1):
-        #     tm = ()
-        #     for i in range(32):
-        #         flag_k = bool(i>=self.kq[0])
-        #         flag_v = bool(i>=self.vq[0])
-        #         # print(i,flag_k,flag_v)
-        #         p_l = past_key_values[i]
-        #         if flag_k and flag_v:
-        #             p_l = p_l[:2]+((p_l[2]-1/3*p_l[2]),(p_l[3]+1/6*p_l[2]),)+p_l[4:6]+((p_l[6]-1/3*p_l[6]),(p_l[7]+1/6*p_l[6]),)+p_l[8:]
-        #         elif flag_k:
-        #             p_l = p_l[:2]+((p_l[2]-1/3*p_l[2]),(p_l[3]+1/6*p_l[2]),)+p_l[4:]
-        #         elif flag_v:
-        #             p_l = p_l[:6]+((p_l[6]-1/3*p_l[6]),(p_l[7]+1/6*p_l[6]),)+p_l[8:]
-        #         # else:
-        #         #     p_l = p_l
-        #         tm = tm+(p_l,)
-        #     past_key_values = tm
-            
-        # # INFO: REAL CALI:
-        # if past_key_values is not None and self.cnt==1:
-        #     for i in [0,31]:
-        #         print(f'\n### layer: {i}\n')
-        #         l = past_key_values[i]
-        #         dei_utils.dei_print(l)
-        #     exit(0)
-        
         seq_length_with_past = seq_length
         past_key_values_length = 0
 
         if past_key_values is not None:
-            # past_key_values_length = past_key_values[0][0].shape[2]
-            past_key_values_length = past_key_values[0][-1]
-
+            past_key_values_length = past_key_values[0][0].shape[2]
             seq_length_with_past = seq_length_with_past + past_key_values_length
 
         if position_ids is None:
@@ -1097,8 +881,7 @@ class MistralModel_KIVI(MistralPreTrainedModel):
             if output_hidden_states:
                 all_hidden_states += (hidden_states,)
 
-            # past_key_value = past_key_values[idx] if past_key_values is not None else None
-            past_key_value = past_key_values
+            past_key_value = past_key_values[idx] if past_key_values is not None else None
 
             if self.gradient_checkpointing and self.training:
                 layer_outputs = self._gradient_checkpointing_func(
@@ -1127,7 +910,6 @@ class MistralModel_KIVI(MistralPreTrainedModel):
 
             if output_attentions:
                 all_self_attns += (layer_outputs[1],)
-            torch.cuda.empty_cache()
 
         hidden_states = self.norm(hidden_states)
 
@@ -1138,7 +920,6 @@ class MistralModel_KIVI(MistralPreTrainedModel):
         next_cache = next_decoder_cache if use_cache else None
         if not return_dict:
             return tuple(v for v in [hidden_states, next_cache, all_hidden_states, all_self_attns] if v is not None)
-        
         return BaseModelOutputWithPast(
             last_hidden_state=hidden_states,
             past_key_values=next_cache,
@@ -1147,12 +928,12 @@ class MistralModel_KIVI(MistralPreTrainedModel):
         )
 
 
-class MistralForCausalLM_KIVI(MistralPreTrainedModel):
+class MistralForCausalLM(MistralPreTrainedModel):
     _tied_weights_keys = ["lm_head.weight"]
 
     def __init__(self, config):
         super().__init__(config)
-        self.model = MistralModel_KIVI(config)
+        self.model = MistralModel(config)
         self.vocab_size = config.vocab_size
         self.lm_head = nn.Linear(config.hidden_size, config.vocab_size, bias=False)
 
@@ -1223,6 +1004,7 @@ class MistralForCausalLM_KIVI(MistralPreTrainedModel):
             output_hidden_states if output_hidden_states is not None else self.config.output_hidden_states
         )
         return_dict = return_dict if return_dict is not None else self.config.use_return_dict
+
         # decoder outputs consists of (dec_features, layer_state, dec_hidden, dec_attn)
         outputs = self.model(
             input_ids=input_ids,
@@ -1235,6 +1017,7 @@ class MistralForCausalLM_KIVI(MistralPreTrainedModel):
             output_hidden_states=output_hidden_states,
             return_dict=return_dict,
         )
+
         hidden_states = outputs[0]
         logits = self.lm_head(hidden_states)
         logits = logits.float()
@@ -1269,8 +1052,7 @@ class MistralForCausalLM_KIVI(MistralPreTrainedModel):
     ):
         # Omit tokens covered by past_key_values
         if past_key_values:
-            # past_length = past_key_values[0][0].shape[2]
-            past_length = past_key_values[0][-1]
+            past_length = past_key_values[0][0].shape[2]
 
             # Some generation methods already pass only the last input ID
             if input_ids.shape[1] > past_length:
@@ -1313,7 +1095,131 @@ class MistralForCausalLM_KIVI(MistralPreTrainedModel):
                 tuple(past_state.index_select(0, beam_idx.to(past_state.device)) for past_state in layer_past),
             )
         return reordered_past
-    
+
+
+@add_start_docstrings(
+    """
+    The Mistral Model transformer with a sequence classification head on top (linear layer).
+
+    [`MistralForSequenceClassification`] uses the last token in order to do the classification, as other causal models
+    (e.g. GPT-2) do.
+
+    Since it does classification on the last token, it requires to know the position of the last token. If a
+    `pad_token_id` is defined in the configuration, it finds the last token that is not a padding token in each row. If
+    no `pad_token_id` is defined, it simply takes the last value in each row of the batch. Since it cannot guess the
+    padding tokens when `inputs_embeds` are passed instead of `input_ids`, it does the same (take the last value in
+    each row of the batch).
+    """,
+    MISTRAL_START_DOCSTRING,
+)
+# Copied from transformers.models.llama.modeling_llama.LlamaForSequenceClassification with Llama->Mistral, LLAMA->MISTRAL
+class MistralForSequenceClassification(MistralPreTrainedModel):
+    def __init__(self, config):
+        super().__init__(config)
+        self.num_labels = config.num_labels
+        self.model = MistralModel(config)
+        self.score = nn.Linear(config.hidden_size, self.num_labels, bias=False)
+
+        # Initialize weights and apply final processing
+        self.post_init()
+
+    def get_input_embeddings(self):
+        return self.model.embed_tokens
+
+    def set_input_embeddings(self, value):
+        self.model.embed_tokens = value
+
+    @add_start_docstrings_to_model_forward(MISTRAL_INPUTS_DOCSTRING)
+    def forward(
+        self,
+        input_ids: torch.LongTensor = None,
+        attention_mask: Optional[torch.Tensor] = None,
+        position_ids: Optional[torch.LongTensor] = None,
+        past_key_values: Optional[List[torch.FloatTensor]] = None,
+        inputs_embeds: Optional[torch.FloatTensor] = None,
+        labels: Optional[torch.LongTensor] = None,
+        use_cache: Optional[bool] = None,
+        output_attentions: Optional[bool] = None,
+        output_hidden_states: Optional[bool] = None,
+        return_dict: Optional[bool] = None,
+    ) -> Union[Tuple, SequenceClassifierOutputWithPast]:
+        r"""
+        labels (`torch.LongTensor` of shape `(batch_size,)`, *optional*):
+            Labels for computing the sequence classification/regression loss. Indices should be in `[0, ...,
+            config.num_labels - 1]`. If `config.num_labels == 1` a regression loss is computed (Mean-Square loss), If
+            `config.num_labels > 1` a classification loss is computed (Cross-Entropy).
+        """
+        return_dict = return_dict if return_dict is not None else self.config.use_return_dict
+
+        transformer_outputs = self.model(
+            input_ids,
+            attention_mask=attention_mask,
+            position_ids=position_ids,
+            past_key_values=past_key_values,
+            inputs_embeds=inputs_embeds,
+            use_cache=use_cache,
+            output_attentions=output_attentions,
+            output_hidden_states=output_hidden_states,
+            return_dict=return_dict,
+        )
+        hidden_states = transformer_outputs[0]
+        logits = self.score(hidden_states)
+
+        if input_ids is not None:
+            batch_size = input_ids.shape[0]
+        else:
+            batch_size = inputs_embeds.shape[0]
+
+        if self.config.pad_token_id is None and batch_size != 1:
+            raise ValueError("Cannot handle batch sizes > 1 if no padding token is defined.")
+        if self.config.pad_token_id is None:
+            sequence_lengths = -1
+        else:
+            if input_ids is not None:
+                sequence_lengths = (torch.eq(input_ids, self.config.pad_token_id).long().argmax(-1) - 1).to(
+                    logits.device
+                )
+            else:
+                sequence_lengths = -1
+
+        pooled_logits = logits[torch.arange(batch_size, device=logits.device), sequence_lengths]
+
+        loss = None
+        if labels is not None:
+            labels = labels.to(logits.device)
+            if self.config.problem_type is None:
+                if self.num_labels == 1:
+                    self.config.problem_type = "regression"
+                elif self.num_labels > 1 and (labels.dtype == torch.long or labels.dtype == torch.int):
+                    self.config.problem_type = "single_label_classification"
+                else:
+                    self.config.problem_type = "multi_label_classification"
+
+            if self.config.problem_type == "regression":
+                loss_fct = MSELoss()
+                if self.num_labels == 1:
+                    loss = loss_fct(pooled_logits.squeeze(), labels.squeeze())
+                else:
+                    loss = loss_fct(pooled_logits, labels)
+            elif self.config.problem_type == "single_label_classification":
+                loss_fct = CrossEntropyLoss()
+                loss = loss_fct(pooled_logits.view(-1, self.num_labels), labels.view(-1))
+            elif self.config.problem_type == "multi_label_classification":
+                loss_fct = BCEWithLogitsLoss()
+                loss = loss_fct(pooled_logits, labels)
+        if not return_dict:
+            output = (pooled_logits,) + transformer_outputs[1:]
+            return ((loss,) + output) if loss is not None else output
+
+        return SequenceClassifierOutputWithPast(
+            loss=loss,
+            logits=pooled_logits,
+            past_key_values=transformer_outputs.past_key_values,
+            hidden_states=transformer_outputs.hidden_states,
+            attentions=transformer_outputs.attentions,
+        )
+
+
 import os
 import transformers
 from lm_eval.utils import MultiTokenEOSCriteria, stop_sequences_criteria
@@ -1325,7 +1231,8 @@ from transformers.models.auto.modeling_auto import (
 )
 from accelerate import Accelerator, find_executable_batch_size, DistributedType
 
-class LMEvalMistralForCausalLM_KIVI(HFLM):
+
+class LMEvalMistralForCausalLM(HFLM):
     AUTO_MODEL_CLASS = None
     _DEFAULT_MAX_LENGTH = 2048
     def __init__(
@@ -1346,7 +1253,7 @@ class LMEvalMistralForCausalLM_KIVI(HFLM):
         max_batch_size: Optional[int] = 64,
         low_cpu_mem_usage: Optional[bool] = True,
         trust_remote_code: Optional[bool] = False,
-        use_fast_tokenizer: Optional[bool] = True,
+        use_fast_tokenizer: Optional[bool] = False,
         cache_dir: Optional[Union[str, os.PathLike]] = None,
         # arguments used for splitting a model across GPUs naively.
         # only used if `parallelize=True`.
@@ -1361,7 +1268,7 @@ class LMEvalMistralForCausalLM_KIVI(HFLM):
         bnb_4bit_compute_dtype: Optional[Union[str, torch.dtype]] = None,
         gptq: Optional[Union[bool, str]] = False,
         gptq_use_triton: Optional[bool] = False,
-        annotation: Optional[str] = None,
+        attn_implementation: Optional[str] = 'flash_attention_2',
     ) -> None:
         super().__init__()
 
@@ -1423,15 +1330,10 @@ class LMEvalMistralForCausalLM_KIVI(HFLM):
             revision=revision,
             trust_remote_code=trust_remote_code,
         )
-        self._config.k_bits = k_bits
-        self._config.v_bits = v_bits
-        self._config.group_size = group_size
-        self._config.residual_length = residual_length
+        # self._config.k_bits = k_bits
+        # self._config.v_bits = v_bits
+        # self._config.group_size = group_size
         # self._config.attention_dropout = 0.0
-        assert self._config.use_cache
-        self._config.annotation = annotation
-        self._config.use_flash = True
-        
         if not gptq:
             if load_in_4bit:
                 assert (
@@ -1446,7 +1348,7 @@ class LMEvalMistralForCausalLM_KIVI(HFLM):
                         model_kwargs["bnb_4bit_compute_dtype"] = utils.get_dtype(
                             bnb_4bit_compute_dtype
                         )
-            self._model = MistralForCausalLM_KIVI.from_pretrained(
+            self._model = MistralForCausalLM.from_pretrained(
                 pretrained,
                 cache_dir=cache_dir,
                 revision=revision,
@@ -1455,6 +1357,7 @@ class LMEvalMistralForCausalLM_KIVI(HFLM):
                 low_cpu_mem_usage=low_cpu_mem_usage,
                 trust_remote_code=trust_remote_code,
                 load_in_8bit=load_in_8bit,
+                attn_implementation=attn_implementation,
                 **model_kwargs,
             )
         else:

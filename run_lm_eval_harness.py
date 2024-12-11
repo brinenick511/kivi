@@ -16,6 +16,8 @@ from utils.process_args import process_args
 from transformers import LlamaConfig, AutoTokenizer, FalconConfig, MistralConfig
 from utils.data import set_seed
 from datasets import load_dataset
+from filelock import FileLock
+
 
 from accelerate import Accelerator
 accelerator = Accelerator()
@@ -33,6 +35,15 @@ if __name__ == '__main__':
                                             trust_remote_code=True, 
                                             tokenizer_type='llama',
                                             model_max_length=training_args.model_max_length)
+    elif 'mistral' in model_args.model_name_or_path.lower():
+        config = MistralConfig.from_pretrained(model_args.model_name_or_path)
+        # config = LlamaConfig.from_pretrained(model_args.model_name_or_path)
+        tokenizer = AutoTokenizer.from_pretrained(model_args.model_name_or_path, 
+                                            use_fast=False, 
+                                            trust_remote_code=True, 
+                                            # tokenizer_type='llama',
+                                            # model_max_length=training_args.model_max_length,
+                                            )
     else:
         raise NotImplementedError
 
@@ -42,6 +53,7 @@ if __name__ == '__main__':
     else:
         parallel = False
         low_cpu_mem_usage=True
+    
     if 'llama' in model_args.model_name_or_path.lower():
         if model_args.k_bits == 16 and model_args.v_bits == 16:
             from models.modeling_llama import LMEvalLlamaForCausalLM
@@ -54,10 +66,12 @@ if __name__ == '__main__':
                 cache_dir=training_args.cache_dir,
                 dtype=dtype,
                 low_cpu_mem_usage=low_cpu_mem_usage,
+                attn_implementation="flash_attention_2",
             )
         else:
-            assert model_args.k_bits in [2, 4] and model_args.v_bits in [2, 4]
+            # assert model_args.k_bits in [2, 4] and model_args.v_bits in [2, 4]
             from models.llama_kivi import LMEvalLlamaForCausalLM_KIVI
+            # from models.lme_llama_kivi import LMEvalLlamaForCausalLM_KIVI
 
             model = LMEvalLlamaForCausalLM_KIVI(
                 k_bits=model_args.k_bits,
@@ -68,6 +82,37 @@ if __name__ == '__main__':
                 cache_dir=training_args.cache_dir,
                 dtype=dtype,
                 low_cpu_mem_usage=low_cpu_mem_usage,
+                annotation=str(model_args.annotation).strip(),
+            )
+    elif 'mistral' in model_args.model_name_or_path.lower():
+        if model_args.k_bits == 16 and model_args.v_bits == 16:
+            from models.modeling_mistral import LMEvalMistralForCausalLM
+            model = LMEvalMistralForCausalLM(
+                k_bits=model_args.k_bits,
+                v_bits=model_args.v_bits,
+                group_size=model_args.group_size,
+                residual_length=model_args.residual_length,
+                pretrained=model_args.model_name_or_path,
+                cache_dir=training_args.cache_dir,
+                dtype=dtype,
+                low_cpu_mem_usage=low_cpu_mem_usage,
+                attn_implementation="flash_attention_2",
+            )
+        else:
+            # assert model_args.k_bits in [2, 4] and model_args.v_bits in [2, 4]
+            # from models.llama_kivi import LMEvalLlamaForCausalLM_KIVI
+            from model.r_mistral_kivi import LMEvalMistralForCausalLM_KIVI
+
+            model = LMEvalMistralForCausalLM_KIVI(
+                k_bits=model_args.k_bits,
+                v_bits=model_args.v_bits,
+                group_size=model_args.group_size,
+                residual_length=model_args.residual_length,
+                pretrained=model_args.model_name_or_path,
+                cache_dir=training_args.cache_dir,
+                dtype=dtype,
+                low_cpu_mem_usage=low_cpu_mem_usage,
+                annotation=str(model_args.annotation).strip(),
             )
     else:
         raise NotImplementedError
@@ -100,7 +145,16 @@ if __name__ == '__main__':
             # no_cache=True,
             # num_fewshot=data_args.num_fewshot,
         )
-        print(evaluator.make_table(results))
+        content=evaluator.make_table(results)
+        print(f'\n###{str(model_args.annotation).strip()}###\n')
+        print(content)
+        filename = '/new_data/yanghq/tqa.txt'
+        lock_file = filename + '.lock'  # 锁文件名
+        lock = FileLock(lock_file)
+        with lock:
+            with open(filename, 'a') as ffile:
+                ffile.write(f'\n###{str(model_args.annotation).strip()}###\n')
+                ffile.write(content)
         # samples = results["samples"]
         # filepath = f"./output_samples/{training_args.exp_name}.json"
         # with open(filepath, "w") as f:
