@@ -854,7 +854,7 @@ class LlamaModel_KIVI(LlamaPreTrainedModel):
         else: # decode
             self.cnt+=1
         
-        # print(f'\n###\n{self.idx}, {self.cnt}\n###\n')
+        # print(f'\n###\n{self.idx}, {self.cnt}, {seq_length}\n###\n')
         # if self.idx==2:
         #     exit(0)
         
@@ -932,13 +932,14 @@ class LlamaModel_KIVI(LlamaPreTrainedModel):
 
             if output_attentions:
                 all_self_attns += (layer_outputs[1],)
+            torch.cuda.empty_cache()
 
         hidden_states = self.norm(hidden_states)
 
         # add hidden states from the last decoder layer
         if output_hidden_states:
             all_hidden_states += (hidden_states,)
-
+        torch.cuda.empty_cache()
         next_cache = next_decoder_cache if use_cache else None
         if not return_dict:
             return tuple(v for v in [hidden_states, next_cache, all_hidden_states, all_self_attns] if v is not None)

@@ -966,7 +966,7 @@ class MistralModel_KIVI(MistralPreTrainedModel):
             self.cnt+=1
         # if self.idx==2:
         #     exit(0)
-        # print(f'\n###\n{self.idx}, {self.cnt}\n###\n')
+        # print(f'\n###\n{self.idx}, {self.cnt}, {seq_length}\n###\n')
         torch.cuda.empty_cache()
         
         # INFO: MERGE!

@@ -64,45 +64,51 @@ if __name__ == "__main__":
             # s=f'gamma = {l[-1]}\n\nasym-kv\n{output_path}\n'
             s=f'\n{l[-2]}, {l[-1]}\n\n{output_path}\n'
             file_content = file.read()
-            # data = json.loads(file_content)
-            # ol = []
-            # kl = list(data.keys())
-            # vl = list(data.values())
-            # avg=0.0
-            # tl=['tre','zh','news']
-            # for i in range(len(vl)):
-            #     vl[i] = int(100*float(vl[i]))/100
-            #     avg+=vl[i]
-            #     for j in range(len(tl)):
-            #         if tl[j] in kl[i]:
-            #             ol.append(i)
-            # new_data = l
-            # for i in ol:
-            #     s=f'{s}\n"{kl[i]}": {vl[i]}'
-            #     new_data+=[vl[i],]
-            # avg=int(100*avg/len(ol))/100
-            # s=f'{s}\n"average": {avg}'
-            # if 'm' in model_args.annotation:
-            #     file_name = '/new_data/yanghq/ans_m.csv'
-            # elif 'q' in model_args.annotation:
-            #     file_name = '/new_data/yanghq/ans_q.csv'
-            # else:
-            #     file_name = '/new_data/yanghq/ans.csv'
-            # lock_file = file_name + '.lock'  # 锁文件名
-            # lock = FileLock(lock_file)
-            # with lock:
-            #     try:
-            #         with open(file_name, 'x', newline='') as ffile:
-            #             writer = csv.writer(ffile)
-            #             writer.writerow(['kq', 'vq', 'km', 'vm', 'trec', 'mqazh'])
-            #     except FileExistsError:
-            #         pass
-            #     with open(file_name, 'a', newline='') as ffile:
-            #         writer = csv.writer(ffile)
-            #         writer.writerow(new_data)
+            if 'll' in output_path:
+                data = json.loads(file_content)
+                ol = []
+                kl = list(data.keys())
+                vl = list(data.values())
+                avg=0.0
+                tl=['multifieldqa_zh','multifieldqa_en','2wikimqa','trec','hotpotqa','musique','samsum','qasper','triviaqa','passage_count','lcc',]
+                for i in range(len(vl)):
+                    vl[i] = int(100*float(vl[i]))/100
+                    avg+=vl[i]
+                    for j in range(len(tl)):
+                        if tl[j] in kl[i]:
+                            ol.append(i)
+                new_data = l[:4]
+                new_data = l[-2:]
+                for i in ol:
+                    s=f'{s}\n"{kl[i]}": {vl[i]}'
+                    new_data+=[vl[i],]
+                avg=int(100*avg/len(ol))/100
+                s=f'{s}\n"average": {avg}'
+                if 'll0' in model_args.annotation:
+                    file_name = '/new_data/yanghq/ll0.csv'
+                elif 'll1' in model_args.annotation:
+                    file_name = '/new_data/yanghq/ll1.csv'
+                elif 'll2' in model_args.annotation:
+                    file_name = '/new_data/yanghq/ll2.csv'
+                else:
+                    file_name = '/new_data/yanghq/ans.csv'
+                lock_file = file_name + '.lock'  # 锁文件名
+                lock = FileLock(lock_file)
+                with lock:
+                    try:
+                        with open(file_name, 'x', newline='') as ffile:
+                            writer = csv.writer(ffile)
+                            # writer.writerow(['kq', 'vq', 'km', 'vm', 'multifieldqa_zh','multifieldqa_en','2wikimqa','trec','hotpotqa','musique','samsum','qasper','triviaqa','passage_count','lcc',])
+                            writer.writerow(['m1', 'm2', 'multifieldqa_zh','multifieldqa_en','2wikimqa','trec','hotpotqa','musique','samsum','qasper','triviaqa','passage_count','lcc',])
+                    except FileExistsError:
+                        pass
+                    with open(file_name, 'a', newline='') as ffile:
+                        writer = csv.writer(ffile)
+                        writer.writerow(new_data)
         # send_qq_email(f'{output_path}: Success',f'{k},{v},{m}\n{ml[m]}\n\n{output_path}\n'+file_content)
-        send_qq_email(f'{output_path}: Success',f'{s}\n\n\n{file_content}')
-        print(f'{output_path}: Success')
+            if 'asym' in output_path or 'kivi' in output_path:
+                send_qq_email(f'{output_path}: Success',f'{s}\n\n\n{file_content}')
+                print(f'{output_path}: Success')
     else:
         directory = f'pred/{output_path}/'
         s=f'{output_path}: Fail'
