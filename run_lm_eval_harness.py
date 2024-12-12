@@ -101,7 +101,7 @@ if __name__ == '__main__':
         else:
             # assert model_args.k_bits in [2, 4] and model_args.v_bits in [2, 4]
             # from models.llama_kivi import LMEvalLlamaForCausalLM_KIVI
-            from model.r_mistral_kivi import LMEvalMistralForCausalLM_KIVI
+            from models.r_mistral_kivi import LMEvalMistralForCausalLM_KIVI
 
             model = LMEvalMistralForCausalLM_KIVI(
                 k_bits=model_args.k_bits,
@@ -149,6 +149,8 @@ if __name__ == '__main__':
         print(f'\n###{str(model_args.annotation).strip()}###\n')
         print(content)
         filename = '/new_data/yanghq/tqa.txt'
+        if 'gsm' in data_args.tasks:
+            filename = '/new_data/yanghq/gsm.txt'
         lock_file = filename + '.lock'  # 锁文件名
         lock = FileLock(lock_file)
         with lock:

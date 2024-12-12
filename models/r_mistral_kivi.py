@@ -1346,7 +1346,7 @@ class LMEvalMistralForCausalLM_KIVI(HFLM):
         max_batch_size: Optional[int] = 64,
         low_cpu_mem_usage: Optional[bool] = True,
         trust_remote_code: Optional[bool] = False,
-        use_fast_tokenizer: Optional[bool] = True,
+        use_fast_tokenizer: Optional[bool] = False,
         cache_dir: Optional[Union[str, os.PathLike]] = None,
         # arguments used for splitting a model across GPUs naively.
         # only used if `parallelize=True`.
