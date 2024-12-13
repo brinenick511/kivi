@@ -151,6 +151,8 @@ if __name__ == '__main__':
         filename = '/new_data/yanghq/tqa.txt'
         if 'gsm' in data_args.tasks:
             filename = '/new_data/yanghq/gsm.txt'
+        elif 'coq' in data_args.tasks:
+            filename = '/new_data/yanghq/coqa.txt'
         lock_file = filename + '.lock'  # 锁文件名
         lock = FileLock(lock_file)
         with lock:

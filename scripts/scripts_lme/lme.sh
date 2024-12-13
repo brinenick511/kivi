@@ -9,22 +9,23 @@ model=/new_data/yanghq/models/mistralai/Mistral-7B-v0.3
 # tasks=$6
 # model=$7
 
-gpuid=0
+gpuid=7
 
-anno=16_16_16_16_gsm_kivi_bl_0_0
+anno=16_16_16_16_coqa_mi_bl_0_0
+# anno=16_16_16_16_coqa_ll_bl_0_0
 bit=16
 
 # anno=28_30_30_28_test_ll_1_1
 # anno=32_0_32_32_asym_0_0
 # anno=32_32_32_32_kivi_0_0
-anno=32_32_32_32_gsm_kivi_0_0
+# anno=32_32_32_32_gsm_kivi_0_0
 # anno=32_0_32_32_gsm_asym_0_0
 
-bit=2
+# bit=2
 
 # We report TASK in {coqa, truthfulqa_gen, gsm8k} in our paper.
 tasks=coqa
-tasks=gsm8k
+# tasks=gsm8k
 # tasks=truthfulqa_gen
 
 NUMEXPR_MAX_THREADS='128' CUDA_VISIBLE_DEVICES=$gpuid python run_lm_eval_harness.py --model_name_or_path $model \

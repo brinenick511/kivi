@@ -6,6 +6,7 @@ bit=${2:-"2"}
 model=/new_data/yanghq/models/mistralai/Mistral-7B-Instruct-v0.2
 anno_list=(32_32_32_32_c_0 32_32_32_32_c_1 32_32_32_32_c_2 32_32_32_32_c_3 )
 anno_list=(32_32_32_32_kivi_0_0 32_0_32_32_asym_0_0)
+anno_list=()
 
 
 echo "numbers of array = ${#anno_list[*]}"

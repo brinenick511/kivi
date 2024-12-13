@@ -5,15 +5,22 @@ from matplotlib.colors import LinearSegmentedColormap
 import pandas as pd
 import json
 import glob
+import argparse
 
 FOLDER_PATH = "./results_needle/results/mistral2_7b_pyramidkv_128_run/"
-MODEL_NAME = "mistral_2_7b"
+FOLDER_PATH = './results_needle/results/Mistral2_full_96_test/'
+MODEL_NAME = "mistral_7b_instruct_v0.2"
 PRETRAINED_LEN=33000
 
 
 def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--result_path', type=str, default='None')
+    args = parser.parse_args()
+    
     # Path to the directory containing JSON results
-    folder_path = FOLDER_PATH
+    # folder_path = FOLDER_PATH
+    folder_path = args.result_path
     if("/" in folder_path):
         model_name = folder_path.split("/")[-2]
     else: model_name = MODEL_NAME

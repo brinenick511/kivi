@@ -10,7 +10,7 @@ import glob
 import jieba
 
 import json
-from transformers import AutoModelForCausalLM, AutoTokenizer
+from transformers import AutoModelForCausalLM, AutoTokenizer, MistralConfig
 from anthropic import Anthropic
 import numpy as np
 import argparse
@@ -20,12 +20,12 @@ import sys
 import os
 import tensor_parallel as tp
 
-from openai import OpenAI
+# from openai import OpenAI
 from datetime import datetime, timezone
 import time
 import torch
 
-from pyramidkv.monkeypatch import replace_llama,replace_mistral
+# from pyramidkv.monkeypatch import replace_llama,replace_mistral
 
 scorer = rouge_scorer.RougeScorer(['rouge1', 'rougeL'], use_stemmer=True)
 
@@ -62,7 +62,9 @@ class LLMNeedleHaystackTester:
                  step=100,
                  method='pyramidkv',
                  attn_implementation='flash_attention_2',
-                 max_capacity_prompt=128):
+                 max_capacity_prompt=128,
+                 annotation=''
+                 ):
         """
         :param needle: The needle to be found in the haystack. Default is None.
         :param haystack_dir: The directory of text files to use as background context (or a haystack) in which the needle is to be found. Default is Paul Graham Essays.
@@ -139,7 +141,10 @@ class LLMNeedleHaystackTester:
         self.model_name = model_name
 
         if(self.model_provider in ["LLaMA3", "Mistral"]):
-            self.enc = AutoTokenizer.from_pretrained(model_name, trust_remote_code=True)
+            print(model_name)
+            print(model_name)
+            print(model_name)
+            self.enc = AutoTokenizer.from_pretrained(model_name, use_fast=False, trust_remote_code=True)
             # self.enc.add_special_tokens({'pad_token': '[PAD]'})
             print("loading from %s" % model_name)
 
@@ -159,9 +164,7 @@ class LLMNeedleHaystackTester:
                     low_cpu_mem_usage=True,
                     # use_cache=False
                     ).eval()
-
-
-            if self.method in ["pyramidkv", "snapkv","streamingllm","h2o","cam"]:
+            elif self.method in ["pyramidkv", "snapkv","streamingllm","h2o","cam"]:
 
                 if self.model_provider == 'LLaMA3':
                     replace_llama(self.method.lower())
@@ -204,9 +207,35 @@ class LLMNeedleHaystackTester:
                     self.model_to_test.model.layers[i].self_attn.config.kernel_size = kernel_sizes[i]
                     self.model_to_test.model.layers[i].self_attn.config.pooling = pooling
 
-
                 # self.model_to_test = tp.tensor_parallel(self.model_to_test, sharded=True)
-
+                
+            elif self.method=='ours':
+                from models.r_mistral_kivi import MistralForCausalLM_KIVI
+                config = MistralConfig.from_pretrained(model_name)
+                config.k_bits = 2
+                config.v_bits = 2
+                config.group_size = 32
+                config.residual_length = 128
+                config.use_flash = True
+                config.annotation = str(annotation).strip()
+                self.model_to_test = MistralForCausalLM_KIVI.from_pretrained(
+                    pretrained_model_name_or_path=model_name,
+                    config=config,
+                    torch_dtype=torch.float16,
+                    low_cpu_mem_usage=True,
+                    device_map="auto",
+                ).eval()
+                # self.model_to_test=AutoModelForCausalLM.from_pretrained(
+                #     model_name,
+                #     torch_dtype=torch.float16,
+                #     attn_implementation=self.attn_implementation,
+                #     device_map="auto",
+                #     low_cpu_mem_usage=True,
+                #     # use_cache=False
+                #     ).eval()
+            else:
+                raise ValueError("method must be either 'full' or 'ours'")
+                
         else:raise ValueError("model_provider must be either 'LLaMA3' or 'Mistral'")
 
 
@@ -505,8 +534,9 @@ if __name__ == "__main__":
     parser.add_argument('--model_provider', type=str, default="LLaMA", help='which model to use')
     parser.add_argument('--api_key', type=str, default="", help='OpenAI API Key')
     parser.add_argument('--step', type=int, default=1000)
-    parser.add_argument('--method', type=str, default="full", choices=['full', 'pyramidkv', 'snapkv', 'streamingllm', 'h2o', 'cam'])
+    parser.add_argument('--method', type=str, default="full", choices=['full', 'pyramidkv', 'snapkv', 'streamingllm', 'h2o', 'cam', 'ours'])
     parser.add_argument('--max_capacity_prompt', type=int, default=128)
+    parser.add_argument('--annotation', type=str, default='')
     args = parser.parse_args()
 
 
@@ -523,7 +553,8 @@ if __name__ == "__main__":
                                  step=args.step,
                                  method=args.method,
                                  max_capacity_prompt=args.max_capacity_prompt,
-                                 attn_implementation=args.attn_implementation
+                                 attn_implementation=args.attn_implementation,
+                                 annotation=args.annotation
                                  )
 
     ht.start_test(args)
