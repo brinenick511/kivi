@@ -329,6 +329,11 @@ class LlamaFlashAttention_KIVI(LlamaAttention_KIVI):
         use_cache: bool = False,
         **kwargs,
     ) -> Tuple[torch.Tensor, Optional[torch.Tensor], Optional[Tuple[torch.Tensor]]]:
+        rev_l=[-1,1,3,-1,15,-1]
+        # rev_k = 2**self.k_bits - 1
+        # rev_v = 2**self.v_bits - 1
+        rev_k=rev_l[self.k_bits]
+        rev_v=rev_l[self.v_bits]
         if "padding_mask" in kwargs:
             warnings.warn(
                 "Passing `padding_mask` is deprecated and will be removed in v4.37. Please make sure use `attention_mask` instead.`"
@@ -436,7 +441,8 @@ class LlamaFlashAttention_KIVI(LlamaAttention_KIVI):
                                                                                                                             )
                 # TODO: Cali_K New
                 if self.kq==1:
-                    key_mn_trans_new += (key_scale_trans_new*self.gamma[self.k_bits])
+                    # key_mn_trans_new += (key_scale_trans_new*self.gamma[self.k_bits])
+                    key_mn_trans_new += (rev_k*key_scale_trans_new*self.gamma[self.k_bits])
                     key_scale_trans_new *= (1 - 2*self.gamma[self.k_bits])
                     
                     
@@ -504,7 +510,8 @@ class LlamaFlashAttention_KIVI(LlamaAttention_KIVI):
                                                                                                 )
                 # TODO: Cali_V New
                 if self.vq==1:
-                    mn += (scale*self.gamma[self.v_bits])
+                    # mn += (scale*self.gamma[self.v_bits])
+                    mn += (rev_v*scale*self.gamma[self.v_bits])
                     scale *= (1 - 2*self.gamma[self.v_bits])
                 
                 value_states_full = value_states_full[:, :, 1:, :].contiguous()
@@ -569,7 +576,8 @@ class LlamaFlashAttention_KIVI(LlamaAttention_KIVI):
                 key_states_quant_trans, key_scale_trans, key_mn_trans = triton_quantize_and_pack_along_last_dim(key_states_quant.transpose(2, 3).contiguous(), self.group_size, self.k_bits)
                 # TODO: Cali_K
                 if self.kq == 1:
-                    key_mn_trans += (key_scale_trans*self.gamma[self.k_bits])
+                    # key_mn_trans += (key_scale_trans*self.gamma[self.k_bits])
+                    key_mn_trans += (rev_k*key_scale_trans*self.gamma[self.k_bits])
                     key_scale_trans *= (1 - 2*self.gamma[self.k_bits])
             else:
                 key_states_quant_trans = None
@@ -596,7 +604,8 @@ class LlamaFlashAttention_KIVI(LlamaAttention_KIVI):
                                                                                                 self.v_bits)
                 # TODO: Cali_V
                 if self.vq == 1:
-                    value_mn += (value_scale*self.gamma[self.v_bits])
+                    # value_mn += (value_scale*self.gamma[self.v_bits])
+                    value_mn += (rev_v*value_scale*self.gamma[self.v_bits])
                     value_scale *= (1 - 2*self.gamma[self.v_bits])
 
         past_key_value = (key_states_quant_trans, key_states_full, key_scale_trans, key_mn_trans, 
