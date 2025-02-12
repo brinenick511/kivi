@@ -192,9 +192,8 @@ if __name__ == '__main__':
             # for key in d_map.keys():
             #     if '16' in key or '15' in key or '14' in key:
             #         d_map[key] = 1
-            from models.r_mistral_kivi import MistralForCausalLM_KIVI
-            # from models.q_mistral_kivi import MistralForCausalLM_KIVI
-            # from models.mistral_kivi import MistralForCausalLM_KIVI
+            # from models.r_mistral_kivi import MistralForCausalLM_KIVI
+            from models.n_mistral_kivi import MistralForCausalLM_KIVI
             config.k_bits = model_args.k_bits
             config.v_bits = model_args.v_bits
             config.group_size = model_args.group_size
@@ -284,6 +283,8 @@ if __name__ == '__main__':
         datasets = ['multifieldqa_zh','trec','samsum',]
         datasets = ['trec','samsum',]
         datasets = ['multifieldqa_zh',]
+        datasets = ['multifieldqa_zh','2wikimqa','musique',]
+        datasets = ['hotpotqa','2wikimqa','musique','trec','triviaqa','samsum','passage_count',]
 
         
     # we design specific prompt format and max generation length for each task, feel free to modify them to optimize model output
