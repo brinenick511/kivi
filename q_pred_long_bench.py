@@ -282,9 +282,9 @@ if __name__ == '__main__':
         datasets = ['multi_news']
         datasets = ['multifieldqa_zh','hotpotqa','musique',]
         datasets = ['multifieldqa_zh','trec','samsum',]
-        if 'test' in model_args.annotation.lower():
-            datasets=['samsum']
-        
+        datasets = ['trec','samsum',]
+        datasets = ['multifieldqa_zh',]
+
         
     # we design specific prompt format and max generation length for each task, feel free to modify them to optimize model output
     dataset2prompt = json.load(open("config/dataset2prompt.json", "r"))

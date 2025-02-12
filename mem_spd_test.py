@@ -13,14 +13,12 @@ logging.basicConfig(
     format='%(message)s'
 )
 
-# logging.info("日志已写入文件")
-# exit(0)
 
 K_BITS = 2
 V_BITS = 2
 GROUP_SIZE = 32
-RESIDUAL_LENGTH = 128
-BATCH_SIZE = 16
+RESIDUAL_LENGTH = 32
+BATCH_SIZE = 32
 PATH_TO_YOUR_SAVE_DIR = './outputs'
 ANNOTATION = '32_32_32_32_0_0'
 assert len(sys.argv) > 1, f'len(sys.argv) = {len(sys.argv)}'
@@ -69,9 +67,9 @@ model.cuda().eval()
 
 context = []
 batch_size = BATCH_SIZE
-prompt_lenth = 256
-output_length = 1024*4
-num_repeats = 3
+prompt_lenth = 1024
+output_length = 128
+num_repeats = 2
 for _ in range(batch_size):
     string = 't,' * (prompt_lenth // 2)
     context.append(string[:-1])
@@ -84,13 +82,14 @@ with torch.no_grad():
     torch.cuda.synchronize()
     st = time.time()
     for i in range(num_repeats):
+        # if i==1: st = time.time()
         outputs = model.generate(**inputs, max_new_tokens=output_length)
     torch.cuda.synchronize()
     t = (time.time() - st) / num_repeats * 1000
     t=int(t)
-    print(f'used time: {t} ms')
+    print(f'\nused time: {t} ms')
     used_mem = torch.cuda.max_memory_allocated()
     m = used_mem / 1024 ** 2
     m=int(m)
-    print(f'peak mem: {m} MB')
+    print(f'peak mem: {m} MB\n')
     logging.info(f'{t}\t{m}')

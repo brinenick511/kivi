@@ -102,8 +102,8 @@ class MistralAttention_KIVI(nn.Module):
         
         g1 = [0/6,1/6,2/6,]
         g2 = [0,0.045,0.09,]
-        g1 = [0,0.2,'na']
-        g2 = [0,0.05,'na']
+        # g1 = [0,0.2,'na']
+        # g2 = [0,0.05,'na']
         
         # self.gamma = ['na',2/12,2/56,'na']
         self.gamma = ['na',g1[int(l[-2].strip())],g2[int(l[-1].strip())],'na']
